@@ -197,9 +197,19 @@ export default function FoncedayLive() {
   const [connecting, setConnecting] = useState(isFirebaseConfigured);
   const [syncError, setSyncError] = useState(false);
   const [hostAuth, setHostAuth] = useState(false);
-  const [liveMode, setLiveMode] = useState(false);
+  // Portail d'accès animateur, ouvert en triple-cliquant sur le titre de
+  // l'écran d'accueil (le bouton "animateur" a été retiré pour ne pas être
+  // visible/cliquable par les joueurs).
+  const [hostGateOpen, setHostGateOpen] = useState(false);
   const titleClicksRef = useRef(0);
   const titleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // La vue live (overlay de streaming/OBS) est accessible uniquement via une
+  // URL dédiée (ex: https://.../?live=1), sans mot de passe : pratique pour
+  // configurer une source navigateur OBS une bonne fois pour toutes.
+  const [isLiveUrlView] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('live') === '1';
+  });
 
   // Synchronisation temps réel via Firebase Realtime Database : chaque
   // appareil (animateur, joueurs, vue live) écoute le même chemin et reçoit
@@ -239,13 +249,14 @@ export default function FoncedayLive() {
     }
   }
 
-  // Gestion du triple-click sur le titre pour activer le mode live
+  // Triple-click discret sur le titre pour ouvrir l'accès animateur (mot de
+  // passe requis juste après). Évite d'exposer un bouton "animateur" visible.
   function handleTitleClick() {
     titleClicksRef.current += 1;
     if (titleTimeoutRef.current) clearTimeout(titleTimeoutRef.current);
 
     if (titleClicksRef.current === 3) {
-      setLiveMode((v) => !v);
+      setHostGateOpen(true);
       titleClicksRef.current = 0;
     }
 
@@ -266,13 +277,25 @@ export default function FoncedayLive() {
     return <SyncErrorScreen />;
   }
 
-  // Vue Live - affichage pour le streaming
-  if (liveMode && gameState) {
-    return <LiveView gameState={gameState} onExit={() => setLiveMode(false)} />;
+  // Vue Live - affichage pour le streaming (OBS), accessible via ?live=1
+  if (isLiveUrlView && gameState) {
+    return <LiveView gameState={gameState} />;
+  }
+
+  if (hostGateOpen && !hostAuth) {
+    return (
+      <HostAuthScreen
+        onAuth={() => {
+          setHostAuth(true);
+          setHostGateOpen(false);
+          setRole('host');
+        }}
+        onBack={() => setHostGateOpen(false)}
+      />
+    );
   }
 
   if (!role) return <RoleSelect setRole={setRole} onTitleClick={handleTitleClick} />;
-  if (role === 'host' && !hostAuth) return <HostAuthScreen onAuth={() => setHostAuth(true)} onBack={() => setRole(null)} />;
   if (role === 'join')
     return (
       <NameInput
@@ -303,7 +326,9 @@ export default function FoncedayLive() {
     const hasGameStarted = gameState.gameStarted;
     if (isActivePlayer && hasGameStarted) return <PlayerView gameState={gameState} playerName={name} />;
     else if (!hasGameStarted) return <LobbyPlayerView gameState={gameState} playerName={name} />;
-    else if (wasRegistered) return <EliminatedView gameState={gameState} playerName={name} />;
+    // Un joueur éliminé atterrit sur la vue live (comme le stream), avec en
+    // plus ses stats personnelles (classement, score, manche d'élimination).
+    else if (wasRegistered) return <LiveView gameState={gameState} eliminatedPlayerName={name} />;
     else return <SpectatorView gameState={gameState} />;
   }
 
@@ -391,16 +416,10 @@ function RoleSelect({ setRole, onTitleClick }: { setRole: (r: Role) => void; onT
       <p className="relative z-10 text-sm sm:text-base mb-10 text-muted tracking-[1px]">by Kanaé</p>
       <div className="relative z-10 flex flex-col gap-4 w-full max-w-xs">
         <button
-          onClick={() => setRole('host')}
-          className="py-4 rounded-2xl font-bold text-base transition-transform active:scale-95 bg-linear-to-br from-host-grad-start to-panel border border-brand-green/33 text-host-btn"
-        >
-          Je suis l'animateur
-        </button>
-        <button
           onClick={() => setRole('join')}
           className="py-4 rounded-2xl font-bold text-base transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink"
         >
-          Je suis joueur
+          Je suis un fonceday
         </button>
       </div>
     </div>
@@ -607,59 +626,6 @@ function LobbyPlayerView({ gameState, playerName }: { gameState: GameState; play
           </div>
         </div>
         <p className="text-line text-xs text-center">L'animateur va bientôt lancer le jeu...</p>
-      </div>
-    </div>
-  );
-}
-
-function EliminatedView({ gameState, playerName }: { gameState: GameState; playerName: string }) {
-  const allPlayers = gameState.players || [];
-  const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
-  const myScore = allPlayers.find((p) => p.name === playerName)?.score || 0;
-  const myRank = sorted.findIndex((p) => p.name === playerName) + 1;
-  const gameOver = gameState.currentQuestionIndex >= QUESTIONS.length;
-
-  return (
-    <div className="app-bg min-h-screen w-full flex flex-col items-center justify-center p-6">
-      <Glow />
-      <div className="relative z-10 flex flex-col items-center gap-6 w-full max-w-md">
-        <h2 className="text-2xl font-bold font-heading text-danger">❌ Éliminé</h2>
-        <div className="w-full rounded-2xl p-6 text-center bg-panel/80 border border-danger-dark/33">
-          <p className="text-sm mb-2 text-body">
-            Désolé <b className="text-gold">{playerName}</b>, tu as été éliminé de la partie.
-          </p>
-          <p className="text-[13px] text-muted">
-            Ton classement final : <b className="text-gold">#{myRank}</b> avec <b className="text-brand-green">{myScore} pts</b>
-          </p>
-        </div>
-        <div className="w-full rounded-xl p-4 bg-panel/60 border border-brand-green/13">
-          <p className="text-gold font-bold mb-2">Classement en direct</p>
-          <div className="flex flex-col gap-2 max-h-80 overflow-y-auto">
-            {sorted.map((player, idx) => {
-              const eliminated = isPlayerEliminated(gameState, player.name);
-              return (
-                <div
-                  key={player.name}
-                  className={`flex justify-between items-center p-3 rounded-lg bg-black/30 ${
-                    eliminated && player.name !== playerName ? 'opacity-50' : ''
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted font-bold min-w-[25px]">#{idx + 1}</span>
-                    <span className={player.name === playerName ? 'text-danger' : 'text-gold'}>
-                      {player.name}
-                      {eliminated && ' ❌'}
-                    </span>
-                  </div>
-                  <span className="text-brand-green font-bold">{player.score}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        <p className="text-line text-[11px] text-center">
-          {gameOver ? "La partie est terminée. Merci d'avoir joué ! 🎮" : 'Tu peux continuer à suivre la partie en direct. 📊'}
-        </p>
       </div>
     </div>
   );
@@ -946,6 +912,15 @@ function HostView({ gameState, saveGameState }: { gameState: GameState; saveGame
           <div className="w-full rounded-2xl p-6 bg-panel/80 border border-brand-green/27">
             <p className="text-gold text-lg font-bold mb-3">{gameState.showAnswerReview ? '📚 DÉBRIEFING' : 'Question'}</p>
             <p className="text-ink text-base font-bold mb-3">{question.question}</p>
+            {/* Visible uniquement par l'animateur, à tout moment (même avant
+                de révéler quoi que ce soit aux joueurs), pour pouvoir juger
+                les buzz sans avoir à retenir la bonne réponse à part. */}
+            <div className="mb-4 rounded-lg p-3 bg-gold/10 border border-gold/40">
+              <p className="text-gold-dark text-[11px] font-bold mb-1 tracking-[0.5px]">👁️ RÉPONSE (visible uniquement par toi)</p>
+              <p className="text-gold text-sm font-bold">
+                {String.fromCharCode(65 + question.correct)}. {question.options[question.correct]}
+              </p>
+            </div>
             {gameState.showAnswerReview ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {question.options.map((opt, idx) => (
@@ -1179,12 +1154,24 @@ function HostLobbyView({ gameState, saveGameState }: { gameState: GameState; sav
 }
 
 // ============ VUE LIVE ============
-function LiveView({ gameState, onExit }: { gameState: GameState; onExit: () => void }) {
+function LiveView({
+  gameState,
+  onExit,
+  eliminatedPlayerName,
+}: {
+  gameState: GameState;
+  onExit?: () => void;
+  // Rempli uniquement quand un joueur éliminé atterrit sur cette vue : ajoute
+  // une bannière + une carte de stats personnelles, en plus du live normal.
+  eliminatedPlayerName?: string;
+}) {
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
   const question = getCurrentQuestion(gameState);
   const questionNum = getQuestionInManche(gameState);
   const hasBuzz = !!gameState.currentBuzz;
+  const myScore = eliminatedPlayerName ? allPlayers.find((p) => p.name === eliminatedPlayerName)?.score || 0 : 0;
+  const myRank = eliminatedPlayerName ? sorted.findIndex((p) => p.name === eliminatedPlayerName) + 1 : 0;
 
   return (
     <div className="app-bg min-h-screen w-full p-4 sm:p-8">
@@ -1200,6 +1187,15 @@ function LiveView({ gameState, onExit }: { gameState: GameState; onExit: () => v
             Manche {gameState.currentManche} • Question {questionNum}
           </p>
         </div>
+
+        {eliminatedPlayerName && (
+          <div className="rounded-2xl p-5 mb-8 text-center bg-danger-strong/12 border-2 border-danger-dark">
+            <p className="text-danger font-bold text-lg mb-1">
+              ❌ {eliminatedPlayerName}, tu as été éliminé de la partie
+            </p>
+            <p className="text-body text-sm">Tu peux continuer à suivre la partie en direct ci-dessous ! 📊</p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Colonne gauche - Question */}
@@ -1270,6 +1266,13 @@ function LiveView({ gameState, onExit }: { gameState: GameState; onExit: () => v
 
           {/* Colonne droite - Classement */}
           <div className="flex flex-col gap-6">
+            {eliminatedPlayerName && (
+              <div className="rounded-3xl p-6 text-center bg-panel/90 border-2 border-danger-dark/33">
+                <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">TES STATS</p>
+                <p className="text-4xl font-black text-gold mb-1">#{myRank}</p>
+                <p className="text-brand-green text-lg font-bold">{myScore} pts</p>
+              </div>
+            )}
             <div className="rounded-3xl p-6 bg-panel/90 border-2 border-brand-green/27">
               <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">CLASSEMENT</p>
 
@@ -1331,12 +1334,14 @@ function LiveView({ gameState, onExit }: { gameState: GameState; onExit: () => v
           </p>
         </div>
 
-        {/* Bouton retour discret */}
-        <div className="mt-6 text-center">
-          <button onClick={onExit} className="px-6 py-2 rounded-lg text-sm font-bold transition-opacity hover:opacity-70 bg-[#64646433] text-muted border border-line">
-            Quitter le live
-          </button>
-        </div>
+        {/* Bouton retour discret (uniquement pour la vue live pilotée par état, pas pour l'URL ?live=1) */}
+        {onExit && (
+          <div className="mt-6 text-center">
+            <button onClick={onExit} className="px-6 py-2 rounded-lg text-sm font-bold transition-opacity hover:opacity-70 bg-[#64646433] text-muted border border-line">
+              Quitter le live
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
