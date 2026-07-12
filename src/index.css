@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-green: #39ff6a;
+  --color-brand-green-dark: #1fae4a;
+  --color-gold: #e8c468;
+  --color-gold-dark: #c9a227;
+  --color-ink: #eafff0;
+  --color-muted: #8fae99;
+  --color-body: #c9d9cd;
+  --color-panel: #0d2415;
+  --color-danger: #ff9999;
+  --color-danger-dark: #aa3333;
+  --color-danger-strong: #c83232;
+  --color-danger-border: #ff6666;
+  --color-line: #4a6353;
+  --color-faint: #5c7768;
+  --color-host-btn: #9dffb8;
+  --color-dark-ink: #06210f;
+  --color-buzzed: #2a3630;
+  --color-warn-bg: #4a3020;
+  --color-warn-border: #8b6820;
+  --color-reset-bg: #4a2015;
+  --color-reset-border: #8b4520;
+  --color-host-grad-start: #1a3a24;
+
+  --font-heading: Georgia, serif;
+  --font-display: "Arial Black", sans-serif;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+  }
+}
+
+@layer components {
+  .app-bg {
+    background: radial-gradient(
+      ellipse at 50% 0%,
+      #163420 0%,
+      #0a1810 55%,
+      #050c07 100%
+    );
+  }
+
+  .app-glow {
+    background:
+      radial-gradient(circle at 30% 20%, rgba(57, 255, 106, 0.12), transparent 45%),
+      radial-gradient(circle at 80% 80%, rgba(200, 160, 40, 0.1), transparent 50%);
+  }
+}
