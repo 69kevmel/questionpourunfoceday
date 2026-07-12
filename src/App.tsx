@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ref, onValue, set as dbSet, runTransaction } from 'firebase/database';
 import { db, isFirebaseConfigured } from './firebase';
 import buzzSoundUrl from './assets/dry-cough-soundbible.mp3';
+import fonceyPosterUrl from './assets/fonceday-poster.webp';
 
 const STATE_PATH = 'fonceday-game-state';
 
@@ -400,20 +401,13 @@ function RoleSelect({ setRole, onTitleClick }: { setRole: (r: Role) => void; onT
   return (
     <div className="app-bg min-h-screen w-full flex flex-col items-center justify-center p-6 text-center">
       <Glow />
-      <h1
-        className="relative z-10 text-4xl sm:text-5xl font-black font-display tracking-tight mb-1 cursor-pointer text-ink [text-shadow:0_0_24px_rgba(57,255,106,0.45)]"
+      <img
+        src={fonceyPosterUrl}
+        alt="Questions pour un Fonceday"
         onClick={onTitleClick}
-      >
-        QUESTIONS
-      </h1>
-      <p className="relative z-10 text-lg sm:text-xl mb-1 text-gold-dark font-semibold tracking-[1px]">pour un</p>
-      <h2
-        className="relative z-10 text-5xl sm:text-6xl mb-2 italic cursor-pointer font-heading text-gold [text-shadow:0_0_20px_rgba(200,160,40,0.4)]"
-        onClick={onTitleClick}
-      >
-        Fonceday
-      </h2>
-      <p className="relative z-10 text-sm sm:text-base mb-10 text-muted tracking-[1px]">by Kanaé</p>
+        className="relative z-10 w-full max-w-xs sm:max-w-sm cursor-pointer select-none rounded-2xl mb-8 [box-shadow:0_0_40px_rgba(57,255,106,0.25)]"
+        draggable={false}
+      />
       <div className="relative z-10 flex flex-col gap-4 w-full max-w-xs">
         <button
           onClick={() => setRole('join')}

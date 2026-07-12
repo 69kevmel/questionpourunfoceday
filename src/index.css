@@ -24,8 +24,8 @@
   --color-reset-border: #8b4520;
   --color-host-grad-start: #1a3a24;
 
-  --font-heading: Georgia, serif;
-  --font-display: "Arial Black", sans-serif;
+  --font-heading: "Rowdies", Georgia, serif;
+  --font-display: "Rowdies", "Arial Black", sans-serif;
 }
 
 @layer base {
