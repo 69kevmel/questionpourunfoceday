@@ -260,7 +260,7 @@ export default function FoncedayLive() {
 
   // Vue Live - affichage pour le streaming (OBS), accessible via ?live=1
   if (isLiveUrlView && gameState) {
-    return <LiveView gameState={gameState} />;
+    return <LiveView gameState={gameState} loadedQuestions={loadedQuestions} />;
   }
 
   if (hostGateOpen && !hostAuth) {
@@ -305,11 +305,11 @@ export default function FoncedayLive() {
     const isActivePlayer = gameState.activePlayers.includes(name);
     const wasRegistered = (gameState.players || []).some((p) => p.name === name);
     const hasGameStarted = gameState.gameStarted;
-    if (isActivePlayer && hasGameStarted) return <PlayerView gameState={gameState} playerName={name} />;
+    if (isActivePlayer && hasGameStarted) return <PlayerView gameState={gameState} playerName={name} loadedQuestions={loadedQuestions} />;
     else if (!hasGameStarted) return <LobbyPlayerView gameState={gameState} playerName={name} />;
     // Un joueur éliminé atterrit sur la vue live (comme le stream), avec en
     // plus ses stats personnelles (classement, score, manche d'élimination).
-    else if (wasRegistered) return <LiveView gameState={gameState} eliminatedPlayerName={name} />;
+    else if (wasRegistered) return <LiveView gameState={gameState} eliminatedPlayerName={name} loadedQuestions={loadedQuestions} />;
     else return <SpectatorView gameState={gameState} />;
   }
 
@@ -691,7 +691,7 @@ function SpectatorView({ gameState }: { gameState: GameState }) {
   );
 }
 
-function PlayerView({ gameState, playerName }: { gameState: GameState; playerName: string }) {
+function PlayerView({ gameState, playerName, loadedQuestions }: { gameState: GameState; playerName: string; loadedQuestions: Question[] }) {
   const prevBuzzRef = useRef(gameState.currentBuzz);
   useEffect(() => {
     if (gameState.currentBuzz && !prevBuzzRef.current && gameState.currentBuzz.name !== playerName) {
@@ -1426,12 +1426,14 @@ function LiveView({
   gameState,
   onExit,
   eliminatedPlayerName,
+  loadedQuestions,
 }: {
   gameState: GameState;
   onExit?: () => void;
   // Rempli uniquement quand un joueur éliminé atterrit sur cette vue : ajoute
   // une bannière + une carte de stats personnelles, en plus du live normal.
   eliminatedPlayerName?: string;
+  loadedQuestions: Question[];
 }) {
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
