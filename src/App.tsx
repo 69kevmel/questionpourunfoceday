@@ -310,7 +310,7 @@ export default function FoncedayLive() {
     else return <SpectatorView gameState={gameState} />;
   }
 
-  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} />;
+  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onManageQuestions={() => setShowQuestionManager(true)} />;
   return null;
 }
 
@@ -799,7 +799,7 @@ function PlayerView({ gameState, playerName }: { gameState: GameState; playerNam
   );
 }
 
-function HostView({ gameState, saveGameState, loadedQuestions }: { gameState: GameState; saveGameState: SaveGameState; loadedQuestions: Question[] }) {
+function HostView({ gameState, saveGameState, loadedQuestions, onManageQuestions }: { gameState: GameState; saveGameState: SaveGameState; loadedQuestions: Question[]; onManageQuestions: () => void }) {
   const prevBuzzRef = useRef(gameState.currentBuzz);
   useEffect(() => {
     if (gameState.currentBuzz && !prevBuzzRef.current) {
@@ -814,7 +814,7 @@ function HostView({ gameState, saveGameState, loadedQuestions }: { gameState: Ga
   const gameOver = gameState.currentQuestionIndex >= loadedQuestions.length;
 
   if (!gameState.gameStarted) {
-    return <HostLobbyView gameState={gameState} saveGameState={saveGameState} onManageQuestions={() => setShowQuestionManager(true)} />;
+    return <HostLobbyView gameState={gameState} saveGameState={saveGameState} onManageQuestions={onManageQuestions} />;
   }
 
   async function handleGoodAnswer() {
@@ -914,7 +914,7 @@ function HostView({ gameState, saveGameState, loadedQuestions }: { gameState: Ga
             <p className="text-muted mt-1">{gameState.activePlayers.length} joueur(s) actif(s) en course</p>
           </div>
           <button
-            onClick={() => setShowQuestionManager(true)}
+            onClick={onManageQuestions}
             className="py-2 px-5 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-gold to-gold-dark text-dark-ink"
           >
             📝 Gérer les questions
