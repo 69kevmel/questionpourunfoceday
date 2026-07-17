@@ -814,7 +814,7 @@ function HostView({ gameState, saveGameState, loadedQuestions }: { gameState: Ga
   const gameOver = gameState.currentQuestionIndex >= loadedQuestions.length;
 
   if (!gameState.gameStarted) {
-    return <HostLobbyView gameState={gameState} saveGameState={saveGameState} />;
+    return <HostLobbyView gameState={gameState} saveGameState={saveGameState} onManageQuestions={() => setShowQuestionManager(true)} />;
   }
 
   async function handleGoodAnswer() {
@@ -1102,7 +1102,7 @@ function HostView({ gameState, saveGameState, loadedQuestions }: { gameState: Ga
   );
 }
 
-function HostLobbyView({ gameState, saveGameState }: { gameState: GameState; saveGameState: SaveGameState }) {
+function HostLobbyView({ gameState, saveGameState, onManageQuestions }: { gameState: GameState; saveGameState: SaveGameState; onManageQuestions?: () => void }) {
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
 
@@ -1163,6 +1163,14 @@ function HostLobbyView({ gameState, saveGameState }: { gameState: GameState; sav
           >
             Réinitialiser
           </button>
+          {onManageQuestions && (
+            <button
+              onClick={onManageQuestions}
+              className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-gold to-gold-dark text-dark-ink"
+            >
+              📝 Gérer les questions
+            </button>
+          )}
         </div>
         <p className="text-line text-xs text-center">
           Partage ce lien avec tes joueurs. Une fois prêt, clique "Démarrer le jeu". <br />
