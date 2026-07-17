@@ -443,7 +443,7 @@ function SocialLinks() {
 function HostAuthScreen({ onAuth, onBack }: { onAuth: () => void; onBack: () => void }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(false);
-  const CORRECT_PASSWORD = 'jetebaise';
+  const CORRECT_PASSWORD = 'jesuisanimateur';
   function handleSubmit() {
     if (password === CORRECT_PASSWORD) {
       setError(false);
