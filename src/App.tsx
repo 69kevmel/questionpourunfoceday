@@ -9,6 +9,7 @@ import { defaultQuestions } from './data/defaultQuestions';
 
 const STATE_PATH = 'fonceday-game-state';
 const SOCIAL_LINK = 'https://linktr.ee/kanaeclub?utm_source=linktree_profile_share&ltsid=f022cf4b-fffb-4e58-9fb5-8ee79d86e340';
+const TEST_BOTS = ['Bot Alice', 'Bot Bob', 'Bot Charlie', 'Bot Diana'];
 
 interface MancheConfig {
   manche: number;
@@ -169,6 +170,8 @@ export default function FoncedayLive() {
   const [syncError, setSyncError] = useState(false);
   const [hostAuth, setHostAuth] = useState(false);
   const [showQuestionManager, setShowQuestionManager] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [previewLive, setPreviewLive] = useState(false);
   // Portail d'accès animateur, ouvert en triple-cliquant sur le titre de
   // l'écran d'accueil (le bouton "animateur" a été retiré pour ne pas être
   // visible/cliquable par les joueurs).
@@ -310,7 +313,7 @@ export default function FoncedayLive() {
     else return <SpectatorView gameState={gameState} />;
   }
 
-  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onManageQuestions={() => setShowQuestionManager(true)} />;
+  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : testMode ? <TestModeView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onExit={() => setTestMode(false)} /> : previewLive ? <LiveView gameState={gameState} onExit={() => setPreviewLive(false)} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onManageQuestions={() => setShowQuestionManager(true)} />;
   return null;
 }
 
@@ -814,7 +817,7 @@ function HostView({ gameState, saveGameState, loadedQuestions, onManageQuestions
   const gameOver = gameState.currentQuestionIndex >= loadedQuestions.length;
 
   if (!gameState.gameStarted) {
-    return <HostLobbyView gameState={gameState} saveGameState={saveGameState} onManageQuestions={onManageQuestions} />;
+    return <HostLobbyView gameState={gameState} saveGameState={saveGameState} onManageQuestions={onManageQuestions} onStartTest={() => setTestMode(true)} onPreviewLive={() => setPreviewLive(true)} />;
   }
 
   async function handleGoodAnswer() {
@@ -1102,7 +1105,7 @@ function HostView({ gameState, saveGameState, loadedQuestions, onManageQuestions
   );
 }
 
-function HostLobbyView({ gameState, saveGameState, onManageQuestions }: { gameState: GameState; saveGameState: SaveGameState; onManageQuestions?: () => void }) {
+function HostLobbyView({ gameState, saveGameState, onManageQuestions, onStartTest, onPreviewLive }: { gameState: GameState; saveGameState: SaveGameState; onManageQuestions?: () => void; onStartTest?: () => void; onPreviewLive?: () => void }) {
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
 
@@ -1171,11 +1174,248 @@ function HostLobbyView({ gameState, saveGameState, onManageQuestions }: { gameSt
               📝 Gérer les questions
             </button>
           )}
+          {onStartTest && (
+            <button
+              onClick={onStartTest}
+              className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-warn-bg text-gold-dark border border-warn-border"
+            >
+              🤖 Mode test (4 bots)
+            </button>
+          )}
+          {onPreviewLive && (
+            <button
+              onClick={onPreviewLive}
+              className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-gold/80 to-gold-dark/80 text-dark-ink"
+            >
+              👁️ Preview Live
+            </button>
+          )}
         </div>
         <p className="text-line text-xs text-center">
           Partage ce lien avec tes joueurs. Une fois prêt, clique "Démarrer le jeu". <br />
           Les joueurs qui rejoignent après ne pourront que regarder les stats. 👀
         </p>
+      </div>
+    </div>
+  );
+}
+
+// ============ TEST MODE ============
+function TestModeView({ gameState, saveGameState, loadedQuestions, onExit }: { gameState: GameState; saveGameState: SaveGameState; loadedQuestions: Question[]; onExit: () => void }) {
+  const prevBuzzRef = useRef(gameState.currentBuzz);
+  const [simulating, setSimulating] = useState(false);
+
+  useEffect(() => {
+    // Auto-start test game if not started
+    if (!gameState.gameStarted && gameState.players.length >= 4) {
+      const activePlayerNames = gameState.players.map((p) => p.name);
+      saveGameState({
+        ...gameState,
+        gameStarted: true,
+        activePlayers: activePlayerNames,
+      });
+    }
+  }, [gameState.gameStarted, gameState.players, saveGameState]);
+
+  useEffect(() => {
+    if (gameState.currentBuzz && !prevBuzzRef.current && !simulating) {
+      playBuzzSound();
+    }
+    prevBuzzRef.current = gameState.currentBuzz;
+  }, [gameState.currentBuzz, simulating]);
+
+  // Simulate bot answers
+  useEffect(() => {
+    if (!gameState.currentBuzz || simulating) return;
+
+    const delay = 1000 + Math.random() * 3000;
+    const timer = setTimeout(async () => {
+      setSimulating(true);
+      const winner = gameState.currentBuzz.name;
+      const allPlayers = gameState.players || [];
+      const updatedPlayers = allPlayers.map((p) => (p.name === winner ? { ...p, score: p.score + 3 } : p));
+
+      // Random chance of wrong answer (20%)
+      if (Math.random() < 0.2) {
+        await saveGameState({
+          ...gameState,
+          players: updatedPlayers,
+          currentBuzz: null,
+          showAnswerReview: true,
+          showOptions: false,
+          wrongBuzzers: [...(gameState.wrongBuzzers || []), winner],
+        });
+      } else {
+        await saveGameState({
+          ...gameState,
+          players: updatedPlayers,
+          currentBuzz: null,
+          showAnswerReview: true,
+          showOptions: false,
+          wrongBuzzers: [],
+        });
+      }
+      setSimulating(false);
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [gameState.currentBuzz, gameState.players, gameState.wrongBuzzers, saveGameState, simulating]);
+
+  const allPlayers = gameState.players || [];
+  const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
+  const question = getCurrentQuestion(gameState, loadedQuestions);
+  const gameOver = gameState.currentQuestionIndex >= loadedQuestions.length;
+
+  async function handleNext() {
+    const nextQuestionIndex = gameState.currentQuestionIndex + 1;
+    const questionsInCurrentManche = getQuestionsInManche(gameState.currentManche);
+    const questionInManche = getQuestionInManche(gameState);
+    const mancheEnding = questionInManche >= questionsInCurrentManche;
+
+    let nextManche = gameState.currentManche;
+    let activePlayers = gameState.activePlayers;
+    let lastElimination: LastElimination | null = null;
+
+    if (mancheEnding) {
+      const { activePlayers: kept, eliminatedNames } = computeEliminationForManche(gameState, gameState.currentManche);
+      activePlayers = kept;
+      if (eliminatedNames.length > 0) {
+        lastElimination = {
+          manche: gameState.currentManche,
+          eliminatedNames,
+          remaining: kept.length,
+        };
+      }
+      nextManche = Math.min(gameState.currentManche + 1, MANCHES_CONFIG.length);
+    }
+
+    await saveGameState({
+      ...gameState,
+      currentBuzz: null,
+      currentManche: nextManche,
+      currentQuestionIndex: nextQuestionIndex,
+      activePlayers,
+      lastElimination,
+      showOptions: false,
+      showAnswerReview: false,
+      wrongBuzzers: [],
+    });
+  }
+
+  async function handleReset() {
+    await saveGameState(initGameState());
+  }
+
+  return (
+    <div className="app-bg min-h-screen w-full p-4 sm:p-6">
+      <Glow />
+      <div className="relative z-10 max-w-6xl mx-auto flex flex-col gap-6">
+        <div className="flex justify-between items-center">
+          <h1 className="text-2xl font-bold font-heading text-gold">🤖 Mode test</h1>
+          <button
+            onClick={onExit}
+            className="px-4 py-2 rounded-lg text-sm font-bold transition-opacity hover:opacity-70 bg-[#64646433] text-muted border border-line"
+          >
+            ← Retour
+          </button>
+        </div>
+
+        <p className="text-muted text-sm">Simulation automatique avec {TEST_BOTS.length} bots. Le jeu avance tout seul.</p>
+
+        {gameState.lastElimination && (
+          <div className="rounded-xl p-4 bg-danger-strong/12 border border-danger-dark">
+            <p className="text-danger font-bold mb-1">
+              🚫 Fin de manche {gameState.lastElimination.manche} — Éliminé(s) : {gameState.lastElimination.eliminatedNames.join(', ')}
+            </p>
+            <p className="text-body text-[13px]">Il reste {gameState.lastElimination.remaining} joueur(s) en course.</p>
+          </div>
+        )}
+
+        {question && (
+          <div className="w-full rounded-2xl p-6 bg-panel/80 border border-brand-green/27">
+            <p className="text-gold text-lg font-bold mb-3">{gameState.showAnswerReview ? '📚 DÉBRIEFING' : 'Question'}</p>
+            <p className="text-ink text-base font-bold mb-3">{question.question}</p>
+            <div className="mb-4 rounded-lg p-3 bg-gold/10 border border-gold/40">
+              <p className="text-gold-dark text-[11px] font-bold mb-1 tracking-[0.5px]">👁️ RÉPONSE (visible uniquement par toi)</p>
+              <p className="text-gold text-sm font-bold">
+                {String.fromCharCode(65 + question.correct)}. {question.options[question.correct]}
+              </p>
+            </div>
+            {gameState.showAnswerReview ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {question.options.map((opt, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-4 rounded-lg border ${
+                      idx === question.correct ? 'bg-brand-green/25 border-2 border-brand-green' : 'bg-black/30 border-[#64646433]'
+                    }`}
+                  >
+                    <p className={`text-sm ${idx === question.correct ? 'text-brand-green font-bold' : 'text-body font-normal'}`}>
+                      <b>{String.fromCharCode(65 + idx)}.</b> {opt} {idx === question.correct && '✅'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : gameState.showOptions ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {question.options.map((opt, idx) => (
+                  <div key={idx} className="p-4 rounded-lg bg-black/30 border border-[#64646433]">
+                    <p className="text-body text-sm">
+                      <b>{String.fromCharCode(65 + idx)}.</b> {opt}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-6 rounded-lg text-center bg-brand-green/10 border-2 border-dashed border-brand-green">
+                <p className="text-muted text-sm font-bold">❓ Les réponses sont cachées</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {gameState.currentBuzz && (
+          <div className="rounded-2xl p-6 text-center bg-linear-to-br from-brand-green/20 to-brand-green/5 border-2 border-brand-green">
+            <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">BUZZÉ</p>
+            <p className="text-4xl font-black text-brand-green [text-shadow:0_0_20px_rgba(57,255,106,0.5)]">{gameState.currentBuzz.name}</p>
+            {simulating && <p className="text-muted text-sm mt-2">🤖 Bot en train de répondre...</p>}
+          </div>
+        )}
+
+        {gameState.wrongBuzzers.length > 0 && (
+          <div className="rounded-2xl p-4 bg-black/30 border border-danger-dark/33">
+            <p className="text-danger text-sm">❌ Déjà écarté(s) : {gameState.wrongBuzzers.join(', ')}</p>
+          </div>
+        )}
+
+        <div className="rounded-xl p-4 bg-panel/50 border border-brand-green/13">
+          <p className="text-gold font-bold mb-3">Classement</p>
+          <div className="flex flex-col gap-2">
+            {sorted.map((player, idx) => (
+              <div key={player.name} className={`flex justify-between items-center p-3 rounded-lg bg-black/30 ${
+                isPlayerEliminated(gameState, player.name) ? 'opacity-50' : ''
+              }`}>
+                <span className="text-gold font-medium">{player.name}</span>
+                <span className="text-brand-green font-bold">{player.score}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {gameState.showAnswerReview && (
+          <button onClick={handleNext} className="w-full py-4 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">
+            ✨ Question suivante
+          </button>
+        )}
+
+        {gameOver && (
+          <div className="rounded-xl p-6 text-center bg-gold/10 border-2 border-gold">
+            <p className="text-gold text-2xl font-bold mb-2">🎉 TEST TERMINÉ ! 🎉</p>
+            <button onClick={handleReset} className="mt-4 w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-reset-bg text-gold-dark border border-reset-border">
+              Relancer le test
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
