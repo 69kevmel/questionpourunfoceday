@@ -313,7 +313,7 @@ export default function FoncedayLive() {
     else return <SpectatorView gameState={gameState} />;
   }
 
-  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : testMode ? <TestModeView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onExit={() => setTestMode(false)} /> : previewLive ? <LiveView gameState={gameState} onExit={() => setPreviewLive(false)} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onManageQuestions={() => setShowQuestionManager(true)} onStartTest={() => setTestMode(true)} onPreviewLive={() => setPreviewLive(true)} />;
+  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : testMode ? <TestModeView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onExit={() => setTestMode(false)} /> : previewLive ? <LiveView gameState={gameState} onExit={() => setPreviewLive(false)} loadedQuestions={loadedQuestions} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onManageQuestions={() => setShowQuestionManager(true)} onStartTest={() => setTestMode(true)} onPreviewLive={() => setPreviewLive(true)} />;
   return null;
 }
 
