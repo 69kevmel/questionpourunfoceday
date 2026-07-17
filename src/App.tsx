@@ -817,7 +817,7 @@ function HostView({ gameState, saveGameState, loadedQuestions, onManageQuestions
   const gameOver = gameState.currentQuestionIndex >= loadedQuestions.length;
 
   if (!gameState.gameStarted) {
-    return <HostLobbyView gameState={gameState} saveGameState={saveGameState} onManageQuestions={onManageQuestions} onStartTest={() => setTestMode(true)} onPreviewLive={() => setPreviewLive(true)} />;
+    return <HostLobbyView gameState={gameState} saveGameState={saveGameState} onManageQuestions={onManageQuestions} onStartTest={onStartTest} onPreviewLive={onPreviewLive} />;
   }
 
   async function handleGoodAnswer() {
