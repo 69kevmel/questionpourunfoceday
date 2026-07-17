@@ -3,6 +3,9 @@ import { ref, onValue, set as dbSet, runTransaction } from 'firebase/database';
 import { db, isFirebaseConfigured } from './firebase';
 import buzzSoundUrl from './assets/dry-cough-soundbible.mp3';
 import fonceyPosterUrl from './assets/fonceday-poster.webp';
+import QuestionManager from './components/QuestionManager';
+import { loadQuestions } from './lib/questionManager';
+import { defaultQuestions } from './data/defaultQuestions';
 
 const STATE_PATH = 'fonceday-game-state';
 const SOCIAL_LINK = 'https://linktr.ee/kanaeclub?utm_source=linktree_profile_share&ltsid=f022cf4b-fffb-4e58-9fb5-8ee79d86e340';
@@ -16,41 +19,6 @@ const MANCHES_CONFIG: MancheConfig[] = [
   { manche: 1, questions: 9 },
   { manche: 2, questions: 8 },
   { manche: 3, questions: 8 },
-];
-
-interface Question {
-  id: number;
-  question: string;
-  options: string[];
-  correct: number;
-}
-
-const QUESTIONS: Question[] = [
-  { id: 1, question: 'Quel est la durée de fécondation des limaces rouges ?', options: ['2 semaines', '2 mois', '3 semaines', '5 jours'], correct: 2 },
-  { id: 2, question: "Qui est l'inventeur du trampoline moderne ?", options: ['George Nissen', 'Thomas Edison', 'Nikola Tesla', 'Charles Goodyear'], correct: 0 },
-  { id: 3, question: 'Combien de cœurs possède une pieuvre ?', options: ['1', '2', '3', '5'], correct: 2 },
-  { id: 4, question: "Quel fruit flotte naturellement sur l'eau ?", options: ['La noix de coco', 'La banane', 'La pêche', 'La poire'], correct: 0 },
-  { id: 5, question: "Quelle couleur les hippopotames 'transpirent'-ils ?", options: ['Bleue', 'Rougeâtre', 'Verte', 'Transparente'], correct: 1 },
-  { id: 6, question: "Quel est l'animal national de l'Écosse ?", options: ['Le cerf', "L'aigle", 'La licorne', 'Le mouton'], correct: 2 },
-  { id: 7, question: "Quelle est la seule lettre qui n'apparaît dans aucun nom d'État américain ?", options: ['Q', 'X', 'J', 'Z'], correct: 0 },
-  { id: 8, question: 'Combien de dents possède normalement un escargot ?', options: ['32', '250', 'Environ 14 000', "Il n'en possède pas"], correct: 2 },
-  { id: 9, question: 'Quel est le seul mammifère capable de voler ?', options: ["L'écureuil volant", 'La chauve-souris', 'Le phalanger', 'Le colugo'], correct: 1 },
-  { id: 10, question: 'Quelle planète tourne sur elle-même presque couchée ?', options: ['Mars', 'Uranus', 'Saturne', 'Neptune'], correct: 1 },
-  { id: 11, question: 'Combien de temps un paresseux met-il environ à digérer un repas ?', options: ['24 heures', '3 jours', "Jusqu'à un mois", '12 heures'], correct: 2 },
-  { id: 12, question: 'Quel est le seul aliment qui ne se périme pratiquement jamais ?', options: ['Le riz', 'Le miel', 'Le sucre', 'Le sel'], correct: 1 },
-  { id: 13, question: "Quelle est la vitesse moyenne d'un escargot ?", options: ['0,05 km/h', '1 km/h', '5 km/h', '10 km/h'], correct: 0 },
-  { id: 14, question: 'Quel est le plus gros organe interne du corps humain ?', options: ['Le cerveau', 'Le foie', 'Les poumons', "L'estomac"], correct: 1 },
-  { id: 15, question: "Quel animal peut dormir jusqu'à 22 heures par jour ?", options: ['Le chat', 'Le koala', 'Le panda', 'Le paresseux'], correct: 1 },
-  { id: 16, question: "Combien d'estomacs possède une vache ?", options: ['1', '2', '4', '6'], correct: 2 },
-  { id: 17, question: 'Quelle planète possède la journée la plus longue du Système solaire ?', options: ['Mercure', 'Vénus', 'Mars', 'Saturne'], correct: 1 },
-  { id: 18, question: 'Quel animal possède le plus grand œil du règne animal ?', options: ['La baleine', 'Le calmar géant', "L'autruche", 'Le requin-baleine'], correct: 1 },
-  { id: 19, question: 'Quel animal ne peut pas sauter ?', options: ["L'éléphant", 'Le rhinocéros', "L'hippopotame", 'Le chameau'], correct: 0 },
-  { id: 20, question: "Quel animal est capable de survivre dans l'espace sans combinaison ?", options: ['Le cafard', 'Le tardigrade', 'La fourmi', 'Le scorpion'], correct: 1 },
-  { id: 21, question: 'Combien de cerveaux possède une sangsue ?', options: ['1', '16', '32', '64'], correct: 2 },
-  { id: 22, question: 'Quel est le plus petit os du corps humain ?', options: ['Le marteau', "L'étrier", "L'enclume", 'La rotule'], correct: 1 },
-  { id: 23, question: 'Sous quel nom Mario est-il apparu pour la première fois dans Donkey Kong ?', options: ['Jumpman', 'Super Mario', 'Plumber Joe', 'Luigi'], correct: 0 },
-  { id: 24, question: "Quel pays possède le plus grand nombre d'îles au monde ?", options: ["L'Indonésie", 'Le Canada', 'La Suède', 'Les Philippines'], correct: 2 },
-  { id: 25, question: "Quel est le seul continent où l'on ne trouve aucune espèce de fourmi à l'état naturel ?", options: ["L'Europe", "L'Antarctique", "L'Australie", "L'Amérique du Sud"], correct: 1 },
 ];
 
 interface Player {
@@ -187,18 +155,20 @@ function getQuestionInManche(gameState: GameState): number {
   return gameState.currentQuestionIndex - count + 1;
 }
 
-function getCurrentQuestion(gameState: GameState): Question | null {
-  return QUESTIONS[gameState.currentQuestionIndex] || null;
+function getCurrentQuestion(gameState: GameState, questions: Question[]): Question | null {
+  return questions[gameState.currentQuestionIndex] || null;
 }
 
 export default function FoncedayLive() {
   const [role, setRole] = useState<Role>(null);
   const [name, setName] = useState('');
   const [nameInput, setNameInput] = useState('');
+  const [loadedQuestions, setLoadedQuestions] = useState<Question[]>(defaultQuestions);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [connecting, setConnecting] = useState(isFirebaseConfigured);
   const [syncError, setSyncError] = useState(false);
   const [hostAuth, setHostAuth] = useState(false);
+  const [showQuestionManager, setShowQuestionManager] = useState(false);
   // Portail d'accès animateur, ouvert en triple-cliquant sur le titre de
   // l'écran d'accueil (le bouton "animateur" a été retiré pour ne pas être
   // visible/cliquable par les joueurs).
@@ -235,6 +205,12 @@ export default function FoncedayLive() {
       }
     );
     return () => unsubscribe();
+  }, []);
+
+  // Chargement des questions depuis Firebase (ou seed par défaut)
+  useEffect(() => {
+    if (!isFirebaseConfigured || !db) return;
+    return loadQuestions(setLoadedQuestions);
   }, []);
 
   async function saveGameState(newState: GameState) {
@@ -334,7 +310,7 @@ export default function FoncedayLive() {
     else return <SpectatorView gameState={gameState} />;
   }
 
-  if (role === 'host' && gameState) return <HostView gameState={gameState} saveGameState={saveGameState} />;
+  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} />;
   return null;
 }
 
@@ -729,7 +705,7 @@ function PlayerView({ gameState, playerName }: { gameState: GameState; playerNam
   // Le joueur a déjà buzzé et répondu faux sur CETTE question : il ne peut
   // plus rebuzzer tant que la question n'a pas changé.
   const alreadyWrong = (gameState.wrongBuzzers || []).includes(playerName);
-  const question = getCurrentQuestion(gameState);
+  const question = getCurrentQuestion(gameState, loadedQuestions);
 
   async function handleBuzz() {
     if (gameState.currentBuzz || alreadyWrong || !db) return;
@@ -823,7 +799,7 @@ function PlayerView({ gameState, playerName }: { gameState: GameState; playerNam
   );
 }
 
-function HostView({ gameState, saveGameState }: { gameState: GameState; saveGameState: SaveGameState }) {
+function HostView({ gameState, saveGameState, loadedQuestions }: { gameState: GameState; saveGameState: SaveGameState; loadedQuestions: Question[] }) {
   const prevBuzzRef = useRef(gameState.currentBuzz);
   useEffect(() => {
     if (gameState.currentBuzz && !prevBuzzRef.current) {
@@ -834,8 +810,8 @@ function HostView({ gameState, saveGameState }: { gameState: GameState; saveGame
 
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
-  const question = getCurrentQuestion(gameState);
-  const gameOver = gameState.currentQuestionIndex >= QUESTIONS.length;
+  const question = getCurrentQuestion(gameState, loadedQuestions);
+  const gameOver = gameState.currentQuestionIndex >= loadedQuestions.length;
 
   if (!gameState.gameStarted) {
     return <HostLobbyView gameState={gameState} saveGameState={saveGameState} />;
@@ -933,10 +909,16 @@ function HostView({ gameState, saveGameState }: { gameState: GameState; saveGame
           <div>
             <h1 className="text-[28px] font-bold font-heading text-gold">
               Manche {gameState.currentManche}/3 — Q{getQuestionInManche(gameState)}/{getQuestionsInManche(gameState.currentManche)} (Global{' '}
-              {gameState.currentQuestionIndex + 1}/25)
+              {gameState.currentQuestionIndex + 1}/{loadedQuestions.length})
             </h1>
             <p className="text-muted mt-1">{gameState.activePlayers.length} joueur(s) actif(s) en course</p>
           </div>
+          <button
+            onClick={() => setShowQuestionManager(true)}
+            className="py-2 px-5 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-gold to-gold-dark text-dark-ink"
+          >
+            📝 Gérer les questions
+          </button>
         </div>
         {gameState.lastElimination && (
           <div className="rounded-xl p-4 bg-danger-strong/12 border border-danger-dark">
@@ -1205,7 +1187,7 @@ function LiveView({
 }) {
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
-  const question = getCurrentQuestion(gameState);
+  const question = getCurrentQuestion(gameState, loadedQuestions);
   const questionNum = getQuestionInManche(gameState);
   const hasBuzz = !!gameState.currentBuzz;
   const myScore = eliminatedPlayerName ? allPlayers.find((p) => p.name === eliminatedPlayerName)?.score || 0 : 0;

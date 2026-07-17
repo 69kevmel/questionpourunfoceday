@@ -1,0 +1,30 @@
+const _defaultQuestions = [
+  { id: 1, question: 'Quel est la durée de fécondation des limaces rouges ?', options: ['2 semaines', '2 mois', '3 semaines', '5 jours'], correct: 2 },
+  { id: 2, question: "Qui est l'inventeur du trampoline moderne ?", options: ['George Nissen', 'Thomas Edison', 'Nikola Tesla', 'Charles Goodyear'], correct: 0 },
+  { id: 3, question: 'Combien de cœurs possède une pieuvre ?', options: ['1', '2', '3', '5'], correct: 2 },
+  { id: 4, question: "Quel fruit flotte naturellement sur l'eau ?", options: ['La noix de coco', 'La banane', 'La pêche', 'La poire'], correct: 0 },
+  { id: 5, question: "Quelle couleur les hippopotames 'transpirent'-ils ?", options: ['Bleue', 'Rougeâtre', 'Verte', 'Transparente'], correct: 1 },
+  { id: 6, question: "Quel est l'animal national de l'Écosse ?", options: ['Le cerf', "L'aigle", 'La licorne', 'Le mouton'], correct: 2 },
+  { id: 7, question: "Quelle est la seule lettre qui n'apparaît dans aucun nom d'État américain ?", options: ['Q', 'X', 'J', 'Z'], correct: 0 },
+  { id: 8, question: 'Combien de dents possède normalement un escargot ?', options: ['32', '250', 'Environ 14 000', "Il n'en possède pas"], correct: 2 },
+  { id: 9, question: 'Quel est le seul mammifère capable de voler ?', options: ["L'écureuil volant", 'La chauve-souris', 'Le phalanger', 'Le colugo'], correct: 1 },
+  { id: 10, question: 'Quelle planète tourne sur elle-même presque couchée ?', options: ['Mars', 'Uranus', 'Saturne', 'Neptune'], correct: 1 },
+  { id: 11, question: 'Combien de temps un paresseux met-il environ à digérer un repas ?', options: ['24 heures', '3 jours', "Jusqu'à un mois", '12 heures'], correct: 2 },
+  { id: 12, question: 'Quel est le seul aliment qui ne se périme pratiquement jamais ?', options: ['Le riz', 'Le miel', 'Le sucre', 'Le sel'], correct: 1 },
+  { id: 13, question: "Quelle est la vitesse moyenne d'un escargot ?", options: ['0,05 km/h', '1 km/h', '5 km/h', '10 km/h'], correct: 0 },
+  { id: 14, question: 'Quel est le plus gros organe interne du corps humain ?', options: ['Le cerveau', 'Le foie', 'Les poumons', "L'estomac"], correct: 1 },
+  { id: 15, question: "Quel animal peut dormir jusqu'à 22 heures par jour ?", options: ['Le chat', 'Le koala', 'Le panda', 'Le paresseux'], correct: 1 },
+  { id: 16, question: "Combien d'estomacs possède une vache ?", options: ['1', '2', '4', '6'], correct: 2 },
+  { id: 17, question: 'Quelle planète possède la journée la plus longue du Système solaire ?', options: ['Mercure', 'Vénus', 'Mars', 'Saturne'], correct: 1 },
+  { id: 18, question: 'Quel animal possède le plus grand œil du règne animal ?', options: ['La baleine', 'Le calmar géant', "L'autruche", 'Le requin-baleine'], correct: 1 },
+  { id: 19, question: 'Quel animal ne peut pas sauter ?', options: ["L'éléphant", 'Le rhinocéros', "L'hippopotame", 'Le chameau'], correct: 0 },
+  { id: 20, question: "Quel animal est capable de survivre dans l'espace sans combinaison ?", options: ['Le cafard', 'Le tardigrade', 'La fourmi', 'Le scorpion'], correct: 1 },
+  { id: 21, question: 'Combien de cerveaux possède une sangsue ?', options: ['1', '16', '32', '64'], correct: 2 },
+  { id: 22, question: 'Quel est le plus petit os du corps humain ?', options: ['Le marteau', "L'étrier", "L'enclume", 'La rotule'], correct: 1 },
+  { id: 23, question: 'Sous quel nom Mario est-il apparu pour la première fois dans Donkey Kong ?', options: ['Jumpman', 'Super Mario', 'Plumber Joe', 'Luigi'], correct: 0 },
+  { id: 24, question: "Quel pays possède le plus grand nombre d'îles au monde ?", options: ["L'Indonésie", 'Le Canada', 'La Suède', 'Les Philippines'], correct: 2 },
+  { id: 25, question: "Quel est le seul continent où l'on ne trouve aucune espèce de fourmi à l'état naturel ?", options: ["L'Europe", "L'Antarctique", "L'Australie", "L'Amérique du Sud"], correct: 1 },
+];
+
+export type Question = typeof _defaultQuestions[number];
+export const defaultQuestions = _defaultQuestions;
