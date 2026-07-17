@@ -313,7 +313,7 @@ export default function FoncedayLive() {
     else return <SpectatorView gameState={gameState} />;
   }
 
-  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : testMode ? <TestModeView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onExit={() => setTestMode(false)} /> : previewLive ? <LiveView gameState={gameState} onExit={() => setPreviewLive(false)} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onManageQuestions={() => setShowQuestionManager(true)} />;
+  if (role === 'host' && gameState) return showQuestionManager ? <QuestionManager onExit={() => setShowQuestionManager(false)} /> : testMode ? <TestModeView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onExit={() => setTestMode(false)} /> : previewLive ? <LiveView gameState={gameState} onExit={() => setPreviewLive(false)} /> : <HostView gameState={gameState} saveGameState={saveGameState} loadedQuestions={loadedQuestions} onManageQuestions={() => setShowQuestionManager(true)} onStartTest={() => setTestMode(true)} onPreviewLive={() => setPreviewLive(true)} />;
   return null;
 }
 
@@ -802,7 +802,7 @@ function PlayerView({ gameState, playerName }: { gameState: GameState; playerNam
   );
 }
 
-function HostView({ gameState, saveGameState, loadedQuestions, onManageQuestions }: { gameState: GameState; saveGameState: SaveGameState; loadedQuestions: Question[]; onManageQuestions: () => void }) {
+function HostView({ gameState, saveGameState, loadedQuestions, onManageQuestions, onStartTest, onPreviewLive }: { gameState: GameState; saveGameState: SaveGameState; loadedQuestions: Question[]; onManageQuestions: () => void; onStartTest?: () => void; onPreviewLive?: () => void }) {
   const prevBuzzRef = useRef(gameState.currentBuzz);
   useEffect(() => {
     if (gameState.currentBuzz && !prevBuzzRef.current) {
