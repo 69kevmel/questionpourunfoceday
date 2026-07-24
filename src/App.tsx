@@ -607,6 +607,7 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
       </div>
     </div>
   );
+}
 
 // ============ HOST VIEW ============
 
