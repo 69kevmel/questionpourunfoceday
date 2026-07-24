@@ -607,14 +607,6 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
       </div>
     </div>
   );
-}
-          <p className="text-3xl font-black text-gold mb-1">#{playerRank}</p>
-          <p className="text-brand-green text-base font-bold">{playerScore} pts</p>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ============ HOST VIEW ============
 
