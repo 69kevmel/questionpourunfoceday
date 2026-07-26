@@ -60,7 +60,13 @@
     position: relative;
     height: 100dvh;
     overflow: hidden;
-    padding: 16px;
+    padding: 18px;
+    background:
+      linear-gradient(90deg, rgba(232, 196, 104, 0.04) 1px, transparent 1px),
+      linear-gradient(rgba(232, 196, 104, 0.04) 1px, transparent 1px),
+      radial-gradient(circle at 48% 34%, rgba(57, 255, 106, 0.1), transparent 42%),
+      #07140c;
+    background-size: 56px 56px, 56px 56px, auto, auto;
   }
 
   .live-layout {
@@ -76,12 +82,34 @@
     grid-template-columns: minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 16px;
-    min-height: 48px;
+    min-height: 56px;
+    border-bottom: 1px solid rgba(232, 196, 104, 0.28);
+    padding: 0 2px 10px;
   }
 
   .live-header h1 {
-    font-size: 2rem;
+    font-size: 2.15rem;
     line-height: 1.1;
+  }
+
+  .live-brand {
+    position: relative;
+    padding-left: 14px;
+  }
+
+  .live-brand::before {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 0;
+    width: 3px;
+    background: #e8c468;
+    content: '';
+  }
+
+  .live-status {
+    border-right: 1px solid rgba(74, 99, 83, 0.7);
+    padding-right: 16px;
   }
 
   .live-dot {
@@ -108,14 +136,16 @@
   .live-progress {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    gap: 5px;
   }
 
   .live-progress-step {
     overflow: hidden;
-    border-top: 3px solid #4a6353;
-    padding-top: 3px;
+    border: 1px solid rgba(74, 99, 83, 0.55);
+    border-radius: 4px;
+    padding: 5px 8px;
     color: #5c7768;
+    background: rgba(0, 0, 0, 0.25);
     font-size: 11px;
     font-weight: 700;
     text-align: center;
@@ -126,26 +156,31 @@
   .live-progress-step.is-current {
     border-color: #39ff6a;
     color: #39ff6a;
+    background: rgba(57, 255, 106, 0.1);
   }
 
   .live-progress-step.is-done {
     border-color: #e8c468;
     color: #e8c468;
+    background: rgba(232, 196, 104, 0.08);
   }
 
   .live-main {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+    grid-template-columns: minmax(0, 1fr) clamp(270px, 22vw, 350px);
     flex: 1;
     min-height: 0;
     gap: 12px;
   }
 
   .live-card {
+    position: relative;
     min-height: 0;
-    border: 1px solid rgba(57, 255, 106, 0.25);
+    border: 1px solid rgba(74, 99, 83, 0.78);
+    border-top-color: rgba(232, 196, 104, 0.58);
     border-radius: 8px;
-    background: rgba(13, 36, 21, 0.9);
+    background: rgba(9, 27, 15, 0.94);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
   }
 
   .live-stage {
@@ -154,7 +189,24 @@
     overflow: hidden;
     flex-direction: column;
     gap: 10px;
-    padding: 18px;
+    padding: 22px;
+  }
+
+  .live-stage::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 54px;
+    height: 54px;
+    border-right: 3px solid rgba(57, 255, 106, 0.62);
+    border-bottom: 3px solid rgba(57, 255, 106, 0.62);
+    content: '';
+    pointer-events: none;
+  }
+
+  .live-stage.is-answering {
+    justify-content: center;
+    padding-bottom: 8%;
   }
 
   .live-center-state {
@@ -181,8 +233,9 @@
   }
 
   .live-question {
-    font-size: 1.5rem;
-    line-height: 1.25;
+    max-width: 1050px;
+    font-size: 1.65rem;
+    line-height: 1.3;
   }
 
   .live-options {
@@ -193,11 +246,11 @@
 
   .live-option {
     overflow: hidden;
-    padding: 10px;
+    padding: 13px;
     border: 1px solid rgba(74, 99, 83, 0.8);
     border-radius: 6px;
-    background: rgba(0, 0, 0, 0.28);
-    font-size: 14px;
+    background: rgba(0, 0, 0, 0.34);
+    font-size: 15px;
     line-height: 1.2;
   }
 
@@ -299,7 +352,49 @@
     overflow: hidden;
     flex-direction: column;
     gap: 8px;
+    flex: 1;
     padding: 12px;
+  }
+
+  .live-sidebar {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .live-camera-slot {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    flex: 0 0 auto;
+    border: 2px solid rgba(232, 196, 104, 0.72);
+    border-radius: 6px;
+    background: #030806;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.3), inset 0 0 0 5px rgba(7, 20, 12, 0.9);
+  }
+
+  .live-camera-slot::before,
+  .live-camera-slot::after {
+    position: absolute;
+    width: 36px;
+    height: 36px;
+    content: '';
+    pointer-events: none;
+  }
+
+  .live-camera-slot::before {
+    top: 8px;
+    left: 8px;
+    border-top: 3px solid #39ff6a;
+    border-left: 3px solid #39ff6a;
+  }
+
+  .live-camera-slot::after {
+    right: 8px;
+    bottom: 8px;
+    border-right: 3px solid #39ff6a;
+    border-bottom: 3px solid #39ff6a;
   }
 
   .live-score-grid {
@@ -307,7 +402,7 @@
     min-height: 0;
     flex: 1;
     grid-template-columns: minmax(0, 1fr);
-    grid-auto-rows: minmax(0, 1fr);
+    grid-template-rows: repeat(var(--live-score-rows), minmax(0, 1fr));
     gap: 4px;
   }
 
@@ -322,7 +417,7 @@
     border: 1px solid rgba(74, 99, 83, 0.55);
     border-radius: 5px;
     color: #c9d9cd;
-    background: rgba(0, 0, 0, 0.25);
+    background: rgba(0, 0, 0, 0.34);
     font-size: 12px;
   }
 
@@ -368,6 +463,7 @@
     .live-header {
       min-height: 38px;
       gap: 8px;
+      padding-bottom: 6px;
     }
 
     .live-header h1 {
@@ -378,6 +474,18 @@
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: minmax(0, 1.8fr) minmax(120px, 0.9fr);
       gap: 6px;
+    }
+
+    .live-sidebar {
+      display: contents;
+    }
+
+    .live-camera-slot {
+      display: none;
+    }
+
+    .live-ranking {
+      grid-row: 2;
     }
 
     .live-stage {
@@ -401,6 +509,7 @@
 
     .live-score-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: repeat(var(--live-mobile-score-rows), minmax(0, 1fr));
       gap: 3px;
     }
 
@@ -430,7 +539,7 @@
     }
   }
 
-  @media (max-height: 650px) {
+  @media (min-width: 768px) and (max-height: 650px) {
     .live-screen {
       padding-top: 6px;
       padding-bottom: 6px;
@@ -441,9 +550,12 @@
     }
 
     .live-progress-step {
-      border-top-width: 2px;
-      padding-top: 1px;
+      padding: 2px 6px;
       font-size: 9px;
+    }
+
+    .live-main {
+      grid-template-columns: minmax(0, 1fr) 240px;
     }
 
     .live-question {

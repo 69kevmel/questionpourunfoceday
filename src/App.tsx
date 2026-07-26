@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { ref, onValue, runTransaction } from 'firebase/database';
 import { db, isFirebaseConfigured } from './firebase';
 import buzzSoundUrl from './assets/dry-cough-soundbible.mp3';
@@ -1062,14 +1062,14 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
       <Glow />
       <div className="live-layout relative z-10 mx-auto max-w-[1600px]">
         <header className="live-header">
-          <div className="min-w-0">
+          <div className="live-brand min-w-0">
             <div className="flex items-center gap-2">
               <span className="live-dot" aria-hidden="true" />
-              <p className="text-brand-green text-[10px] font-bold tracking-[1px]">LIVE</p>
+              <p className="text-brand-green text-[10px] font-bold tracking-[1px]">EN DIRECT</p>
             </div>
             <h1 className="text-gold font-heading font-bold truncate">Questions pour un Fonceday</h1>
           </div>
-          <div className="text-right shrink-0">
+          <div className="live-status text-right shrink-0">
             <p className="text-ink text-xs sm:text-sm font-bold">{liveStatusLabel(gameState)}</p>
             <p className="text-muted text-[10px] sm:text-xs">{active.length} / {allPlayers.length} joueurs en course</p>
           </div>
@@ -1086,7 +1086,7 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
         </div>
 
         <main className="live-main">
-          <section className="live-stage live-card">
+          <section className={`live-stage live-card ${gameState.phase === 'question' ? 'is-answering' : ''}`}>
             {isWaiting ? (
               <div className="live-center-state">
                 <p className="text-brand-green text-xs font-bold tracking-[1px]">EN ATTENTE</p>
@@ -1131,23 +1131,32 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
             ) : null}
           </section>
 
-          <aside className="live-ranking live-card">
-            <div className="live-ranking-head">
-              <p className="text-muted text-[10px] sm:text-xs font-bold tracking-[1px]">CLASSEMENT EN DIRECT</p>
-              {eliminatedPlayerName && viewerEliminated && <span className="text-danger text-[10px] font-bold">ÉLIMINÉ</span>}
-            </div>
-            <div className="live-score-grid">
-              {sorted.map((player, index) => {
-                const eliminated = !gameState.activePlayerIds.includes(player.id) && gameState.gameStarted;
-                return (
-                  <div key={player.id} className={`live-score-row ${index === 0 ? 'is-first' : ''} ${eliminated ? 'is-eliminated' : ''} ${player.id === viewerId ? 'is-viewer' : ''}`}>
-                    <span className="live-rank">{index + 1}</span>
-                    <span className="live-player-name">{player.name}</span>
-                    <b>{player.score}</b>
-                  </div>
-                );
-              })}
-            </div>
+          <aside className="live-sidebar">
+            <div className="live-camera-slot" aria-hidden="true" />
+            <section className="live-ranking live-card">
+              <div className="live-ranking-head">
+                <p className="text-muted text-[10px] sm:text-xs font-bold tracking-[1px]">CLASSEMENT EN DIRECT</p>
+                {eliminatedPlayerName && viewerEliminated && <span className="text-danger text-[10px] font-bold">ÉLIMINÉ</span>}
+              </div>
+              <div
+                className="live-score-grid"
+                style={{
+                  '--live-score-rows': Math.max(sorted.length, 8),
+                  '--live-mobile-score-rows': Math.max(Math.ceil(sorted.length / 3), 3),
+                } as CSSProperties}
+              >
+                {sorted.map((player, index) => {
+                  const eliminated = !gameState.activePlayerIds.includes(player.id) && gameState.gameStarted;
+                  return (
+                    <div key={player.id} className={`live-score-row ${index === 0 ? 'is-first' : ''} ${eliminated ? 'is-eliminated' : ''} ${player.id === viewerId ? 'is-viewer' : ''}`}>
+                      <span className="live-rank">{index + 1}</span>
+                      <span className="live-player-name">{player.name}</span>
+                      <b>{player.score}</b>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           </aside>
         </main>
       </div>

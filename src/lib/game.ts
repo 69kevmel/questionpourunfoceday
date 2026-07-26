@@ -135,7 +135,23 @@ export function normalizeGameState(raw: unknown): GameState {
     submittedAnswers: state.submittedAnswers && typeof state.submittedAnswers === 'object' ? state.submittedAnswers : {},
     answerOutcomes: state.answerOutcomes && typeof state.answerOutcomes === 'object' ? state.answerOutcomes : {},
     finalScores: state.finalScores && typeof state.finalScores === 'object' ? state.finalScores : {},
+    lastElimination: normalizeLastElimination(state.lastElimination),
     pendingElimination: normalizePendingElimination(state.pendingElimination, players),
+  };
+}
+
+function normalizeLastElimination(value: unknown): Elimination | null {
+  if (!value || typeof value !== 'object') return null;
+  const elimination = value as Partial<Elimination>;
+  if (elimination.round !== 'buzzer' && elimination.round !== 'simultaneous') return null;
+  const eliminatedNames = Array.isArray(elimination.eliminatedNames)
+    ? elimination.eliminatedNames.filter((name): name is string => typeof name === 'string')
+    : [];
+  if (!eliminatedNames.length) return null;
+  return {
+    round: elimination.round,
+    eliminatedNames,
+    remaining: Math.max(0, Number(elimination.remaining) || 0),
   };
 }
 
@@ -280,7 +296,9 @@ export function advanceGame(state: GameState, banks: QuestionBanks): GameState {
     activePlayerIds: decision.keptIds,
     finalScores,
     pendingElimination: null,
-    lastElimination: { round: state.round, eliminatedNames, remaining: decision.keptIds.length },
+    lastElimination: eliminatedNames.length
+      ? { round: state.round, eliminatedNames, remaining: decision.keptIds.length }
+      : null,
   });
 }
 

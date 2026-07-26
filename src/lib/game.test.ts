@@ -65,6 +65,17 @@ describe('parcours des effectifs', () => {
   ])('répartit correctement %i joueurs', (count, buzzer, simultaneous) => {
     expect(calculateEliminations(count)).toEqual({ afterBuzzer: buzzer, afterSimultaneous: simultaneous });
   });
+
+  it("n'enregistre pas d'élimination vide à la fin de la simultanée à 3 joueurs", () => {
+    let state = stateWithPlayers(3);
+    state = advanceGame(state, banks);
+    expect(state.lastElimination?.eliminatedNames).toEqual(['Joueur 3']);
+
+    state = advanceGame({ ...state, phase: 'review' }, banks);
+    expect(state.round).toBe('final');
+    expect(state.lastElimination).toBeNull();
+    expect(normalizeGameState(JSON.parse(JSON.stringify(state))).lastElimination).toBeNull();
+  });
 });
 
 describe('égalités et finale', () => {
@@ -131,6 +142,15 @@ describe('validation des réponses et identités', () => {
     expect(normalized).not.toHaveProperty('pause');
     expect(normalized).not.toHaveProperty('usedJokers');
     expect(normalized).not.toHaveProperty('fiftyFiftyPlayers');
+  });
+
+  it("ignore une ancienne élimination dont Firebase a supprimé la liste vide", () => {
+    const normalized = normalizeGameState({
+      ...createGameState(),
+      lastElimination: { round: 'simultaneous', remaining: 2 },
+    });
+
+    expect(normalized.lastElimination).toBeNull();
   });
 
   it('rejette une réponse numérique vide', () => {
