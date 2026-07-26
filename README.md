@@ -28,24 +28,23 @@ que tu héberges toi-même), la synchronisation fonctionne de la même façon en
 déployé : tous les appareils (animateur, joueurs, vue live) se connectent au même projet Firebase
 via internet.
 
-### Sécuriser les règles (recommandé avant le vrai live)
+### Sécurité Firebase
 
-Le mode test autorise la lecture/écriture à tout le monde pendant 30 jours. Avant l'événement,
-va dans **Realtime Database > Règles** et remplace par quelque chose comme :
+Ne déploie pas les règles Realtime Database avec une écriture publique générale. L'application
+valide les actions dans des transactions, mais une personne qui appelle directement l'API Firebase
+peut contourner le client. Pour un événement non privé, ajoute Firebase Authentication, un rôle
+animateur vérifié côté serveur et des règles séparant les actions joueur des transitions animateur.
 
-```json
-{
-  "rules": {
-    "fonceday-game-state": {
-      ".read": true,
-      ".write": true
-    }
-  }
-}
-```
+Le mot de passe de l'écran animateur est seulement une barrière d'interface. Un secret intégré à
+une application Vite est toujours visible dans le navigateur et ne remplace pas une authentification
+serveur.
 
-(Ceci reste ouvert en écriture — suffisant pour un jeu sans compte utilisateur — mais limite la
-portée aux données du jeu plutôt qu'à toute la base.)
+## Partie
+
+- Une partie accepte de 5 à 15 joueurs.
+- La vue publique est disponible sur `/live`.
+- Les égalités au seuil d'élimination sont départagées par l'animateur.
+- La finale utilise un score dédié et continue en mort subite en cas d'égalité.
 
 ## Développement
 
@@ -58,4 +57,12 @@ npm run dev
 
 ```bash
 npm run build
+```
+
+## Vérifications
+
+```bash
+npm test
+npm run lint
+npx tsc --noEmit -p tsconfig.app.json
 ```

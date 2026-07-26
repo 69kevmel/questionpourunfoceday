@@ -1,4 +1,4 @@
-import { get, onValue, ref, runTransaction, set } from 'firebase/database';
+import { get, onValue, ref, runTransaction } from 'firebase/database';
 import { defaultQuestionBanks } from '../data/defaultQuestions';
 import { db } from '../firebase';
 import type { Question, QuestionBanks, QuestionRound } from './game';
@@ -25,10 +25,11 @@ export function loadQuestionBanks(callback: (banks: QuestionBanks) => void, onEr
     callback(cloneDefaults());
     return () => {};
   }
-  return onValue(ref(db, QUESTIONS_PATH), async (snapshot) => {
+  const database = db;
+  return onValue(ref(database, QUESTIONS_PATH), async (snapshot) => {
     const value = snapshot.val();
     if (!value) {
-      const legacy = (await get(ref(db, LEGACY_QUESTIONS_PATH))).val();
+      const legacy = (await get(ref(database, LEGACY_QUESTIONS_PATH))).val();
       const migrated = Array.isArray(legacy) && legacy.length > 0
         ? {
             buzzer: legacy.slice(0, 9).map((question) => ({ ...question, round: 'buzzer' as const, type: 'qcm' as const })),
@@ -36,7 +37,7 @@ export function loadQuestionBanks(callback: (banks: QuestionBanks) => void, onEr
             final: legacy.slice(17).map((question) => ({ ...question, round: 'final' as const, type: 'qcm' as const })),
           }
         : cloneDefaults();
-      await runTransaction(ref(db, QUESTIONS_PATH), (current) => current || migrated);
+      await runTransaction(ref(database, QUESTIONS_PATH), (current) => current || migrated);
       callback(migrated);
       return;
     }

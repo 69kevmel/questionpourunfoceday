@@ -1,19 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
-import { ref, onValue, set as dbSet, runTransaction } from 'firebase/database';
+import { ref, onValue, runTransaction } from 'firebase/database';
 import { db, isFirebaseConfigured } from './firebase';
 import buzzSoundUrl from './assets/dry-cough-soundbible.mp3';
 import fonceyPosterUrl from './assets/fonceday-poster.webp';
 import QuestionManager from './components/QuestionManager';
 import { loadQuestionBanks } from './lib/questionManager';
-import type { QuestionBanks, GameState, QuestionRound, CurrentBuzz, Question } from './lib/game';
+import type { QuestionBanks, GameState, QuestionRound, Question } from './lib/game';
 import {
   createGameState,
   normalizeGameState,
-  questionsForRound,
   getCurrentQuestion,
   getActivePlayers,
   timerDuration,
   calculateEliminations,
+  advanceGame,
+  resolveEliminationTie,
+  isValidPlayerName,
   computeNumericOutcome,
   computeQcmOutcome,
   computeFreeTextOutcome,
@@ -21,7 +23,9 @@ import {
 
 const STATE_PATH = 'fonceday-game-state';
 const SOCIAL_LINK = 'https://linktr.ee/kanaeclub?utm_source=linktree_profile_share&ltsid=f022cf4b-fffb-4e58-9fb5-8ee79d86e340';
-const TEST_BOTS = ['Bot Alice', 'Bot Bob', 'Bot Charlie', 'Bot Diana'];
+const MIN_PLAYERS = 5;
+const MAX_PLAYERS = 15;
+let serverTimeOffsetMs = 0;
 
 type SaveGameState = (newState: GameState) => Promise<void>;
 type Role = 'host' | 'join' | 'consent' | 'lobby' | null;
@@ -40,11 +44,6 @@ function playBuzzSound() {
 
 // ============ HELPERS ============
 
-function getBankIndex(banks: QuestionBanks, round: QuestionRound, index: number): Question | null {
-  const questions = questionsForRound(banks, round);
-  return questions[index] || null;
-}
-
 function isPlayerEliminated(state: GameState, playerName: string): boolean {
   if (!state.gameStarted) return false;
   if (state.activePlayerIds.includes(getPlayerId(state, playerName))) return false;
@@ -56,8 +55,41 @@ function getPlayerId(state: GameState, playerName: string): string {
   return state.players.find((player) => player.name === playerName)?.id || playerName;
 }
 
-function getEliminationPlan(state: GameState): { afterBuzzer: number; afterSimultaneous: number } {
-  return state.eliminationPlan || calculateEliminations(state.players.length);
+function getSubmission(state: GameState, playerId: string, playerName: string) {
+  return state.submittedAnswers[playerId] || state.submittedAnswers[playerName];
+}
+
+function getQuestionWinnerIds(state: GameState, question: Question): string[] {
+  const entries = getActivePlayers(state).map((player) => {
+    const submission = getSubmission(state, player.id, player.name);
+    if (!submission) return null;
+    if (question.type === 'numeric') {
+      const outcome = computeNumericOutcome(question, submission.value);
+      return Number.isFinite(outcome.diff) ? { playerId: player.id, correct: outcome.correct, diff: outcome.diff, submittedAt: submission.submittedAt } : null;
+    }
+    const correct = question.type === 'qcm'
+      ? computeQcmOutcome(question, submission.value)
+      : computeFreeTextOutcome(question, submission.value);
+    return { playerId: player.id, correct, diff: correct ? 0 : Infinity, submittedAt: submission.submittedAt };
+  }).filter((entry): entry is { playerId: string; correct: boolean; diff: number; submittedAt: number } => entry !== null);
+
+  if (question.type !== 'numeric') return entries.filter((entry) => entry.correct).map((entry) => entry.playerId);
+  if (!entries.length) return [];
+  const bestDiff = Math.min(...entries.map((entry) => entry.diff));
+  return entries
+    .filter((entry) => entry.diff === bestDiff)
+    .sort((a, b) => a.submittedAt - b.submittedAt)
+    .slice(0, 1)
+    .map((entry) => entry.playerId);
+}
+
+async function updateGameState(update: (current: GameState) => GameState): Promise<void> {
+  if (!db) return;
+  await runTransaction(ref(db, STATE_PATH), (current: unknown) => update(normalizeGameState(current)));
+}
+
+function timestamp(): number {
+  return Date.now() + serverTimeOffsetMs;
 }
 
 // ============ APP ============
@@ -65,6 +97,7 @@ function getEliminationPlan(state: GameState): { afterBuzzer: number; afterSimul
 export default function FoncedayLive() {
   const [role, setRole] = useState<Role>(null);
   const [name, setName] = useState('');
+  const [playerId, setPlayerId] = useState(() => typeof window === 'undefined' ? '' : sessionStorage.getItem('fonceday-player-id') || '');
   const [nameInput, setNameInput] = useState('');
   const [loadedBanks, setLoadedBanks] = useState<QuestionBanks>({ buzzer: [], simultaneous: [], final: [] });
   const [gameState, setGameState] = useState<GameState | null>(null);
@@ -79,7 +112,8 @@ export default function FoncedayLive() {
   const titleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isLiveUrlView] = useState(() => {
     if (typeof window === 'undefined') return false;
-    return new URLSearchParams(window.location.search).get('live') === '1';
+    const path = window.location.pathname.replace(/\/+$/, '') || '/';
+    return path === '/live' || new URLSearchParams(window.location.search).get('live') === '1';
   });
 
   useEffect(() => {
@@ -106,11 +140,16 @@ export default function FoncedayLive() {
     return loadQuestionBanks(setLoadedBanks);
   }, []);
 
+  useEffect(() => {
+    if (!isFirebaseConfigured || !db) return;
+    return onValue(ref(db, '.info/serverTimeOffset'), (snapshot) => {
+      serverTimeOffsetMs = Number(snapshot.val()) || 0;
+    });
+  }, []);
+
   async function saveGameState(newState: GameState) {
-    if (!db) return;
     try {
-      await dbSet(ref(db, STATE_PATH), newState);
-      setGameState(newState);
+      await updateGameState(() => newState);
     } catch (e) {
       console.error('Save failed', e);
       setSyncError(true);
@@ -130,8 +169,9 @@ export default function FoncedayLive() {
   if (!isFirebaseConfigured) return <FirebaseSetupNotice />;
   if (connecting) return <ConnectingScreen />;
   if (syncError && !gameState) return <SyncErrorScreen />;
+  const gameBanks = gameState?.questionBanks || loadedBanks;
 
-  if (isLiveUrlView && gameState) return <LiveView gameState={gameState} banks={loadedBanks} />;
+  if (isLiveUrlView && gameState) return <LiveView gameState={gameState} banks={gameBanks} />;
 
   if (hostGateOpen && !hostAuth) return (
     <HostAuthScreen
@@ -145,19 +185,21 @@ export default function FoncedayLive() {
   if (role === 'consent') return <ConsentScreen playerName={name} onAccept={() => setRole('lobby')} onReject={() => { setName(''); setNameInput(''); setRole('join'); }} />;
 
   if (role === 'lobby' && gameState) {
-    const isActivePlayer = gameState.activePlayerIds.includes(getPlayerId(gameState, name));
-    const wasRegistered = gameState.players.some((player) => player.name === name);
-    if (isActivePlayer && gameState.gameStarted) return <PlayerView gameState={gameState} banks={loadedBanks} playerName={name} />;
-    if (!gameState.gameStarted) return <LobbyPlayerView gameState={gameState} playerName={name} />;
-    if (wasRegistered) return <LiveView gameState={gameState} banks={loadedBanks} eliminatedPlayerName={name} />;
+    const registeredPlayer = gameState.players.find((player) => player.id === playerId && player.name === name);
+    const isActivePlayer = registeredPlayer ? gameState.activePlayerIds.includes(registeredPlayer.id) : false;
+    const wasRegistered = Boolean(registeredPlayer);
+    if (gameState.phase === 'game-over' && wasRegistered) return <LiveView gameState={gameState} banks={gameBanks} eliminatedPlayerName={name} />;
+    if (isActivePlayer && gameState.gameStarted) return <PlayerView key={`${gameState.round}-${gameState.questionIndex}-${gameState.phase}`} gameState={gameState} banks={gameBanks} playerName={name} />;
+    if (!gameState.gameStarted) return <LobbyPlayerView gameState={gameState} playerName={name} playerId={playerId} onRegistered={setPlayerId} onBack={() => { setName(''); setNameInput(''); setRole('join'); }} />;
+    if (wasRegistered) return <LiveView gameState={gameState} banks={gameBanks} eliminatedPlayerName={name} />;
     return <SpectatorView gameState={gameState} />;
   }
 
   if (role === 'host' && gameState) {
-    if (showQuestionManager) return <QuestionManager onExit={() => setShowQuestionManager(false)} />;
-    if (testMode) return <TestModeView gameState={gameState} banks={loadedBanks} saveGameState={saveGameState} onExit={() => setTestMode(false)} />;
-    if (previewLive) return <LiveView gameState={gameState} banks={loadedBanks} onExit={() => setPreviewLive(false)} />;
-    return <HostView gameState={gameState} banks={loadedBanks} saveGameState={saveGameState} onManageQuestions={() => setShowQuestionManager(true)} onStartTest={() => setTestMode(true)} onPreviewLive={() => setPreviewLive(true)} />;
+    if (showQuestionManager && !gameState.gameStarted) return <QuestionManager onExit={() => setShowQuestionManager(false)} />;
+    if (testMode) return <TestModeView onExit={() => setTestMode(false)} />;
+    if (previewLive) return <LiveView gameState={gameState} banks={gameBanks} onExit={() => setPreviewLive(false)} />;
+    return <HostView gameState={gameState} banks={gameBanks} saveGameState={saveGameState} onManageQuestions={() => setShowQuestionManager(true)} onStartTest={() => setTestMode(true)} onPreviewLive={() => setPreviewLive(true)} />;
   }
   return null;
 }
@@ -268,13 +310,15 @@ function HostAuthScreen({ onAuth, onBack }: { onAuth: () => void; onBack: () => 
 }
 
 function NameInput({ nameInput, setNameInput, onSubmit }: { nameInput: string; setNameInput: (v: string) => void; onSubmit: () => void }) {
+  const valid = isValidPlayerName(nameInput);
   return (
     <div className="app-bg min-h-screen w-full flex flex-col items-center justify-center p-6">
       <Glow />
       <div className="relative z-10 w-full max-w-xs flex flex-col gap-4">
         <p className="text-center mb-2 text-body">Ton pseudo pour la partie</p>
         <input autoFocus value={nameInput} onChange={(e) => setNameInput(e.target.value)} placeholder="Pseudo" maxLength={20} className="px-4 py-3 rounded-xl text-center outline-none bg-panel border border-brand-green/33 text-ink" />
-        <button disabled={!nameInput.trim()} onClick={onSubmit} className="py-3 rounded-xl font-bold disabled:opacity-40 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">Entrer</button>
+        {nameInput.trim() && !valid && <p className="text-danger text-xs text-center">Entre 2 et 20 caractères, sans . # $ [ ] ou /</p>}
+        <button disabled={!valid} onClick={onSubmit} className="py-3 rounded-xl font-bold disabled:opacity-40 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">Entrer</button>
       </div>
     </div>
   );
@@ -309,27 +353,37 @@ function ConsentScreen({ playerName, onAccept, onReject }: { playerName: string;
   );
 }
 
-function LobbyPlayerView({ gameState, playerName }: { gameState: GameState; playerName: string }) {
+function LobbyPlayerView({ gameState, playerName, playerId, onRegistered, onBack }: { gameState: GameState; playerName: string; playerId: string; onRegistered: (id: string) => void; onBack: () => void }) {
   const registeredRef = useRef(false);
+  const [registrationId] = useState(() => playerId || `player-${timestamp()}-${Math.random().toString(36).slice(2, 8)}`);
+  const [registrationError, setRegistrationError] = useState('');
   useEffect(() => {
     if (registeredRef.current) return;
-    const alreadyKnown = gameState.players.some((player) => player.name === playerName);
+    const alreadyKnown = gameState.players.some((player) => player.id === playerId && player.name === playerName);
     if (alreadyKnown) { registeredRef.current = true; return; }
     if (!db) return;
-    let cancelled = false;
     async function registerPlayer() {
       const stateRef = ref(db!, STATE_PATH);
-      await runTransaction(stateRef, (current: unknown) => {
+      const id = registrationId;
+      const result = await runTransaction(stateRef, (current: unknown) => {
         const base = normalizeGameState(current);
-        if (base.players.some((player) => player.name === playerName)) return base;
-        const id = `player-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        if (base.gameStarted || base.players.length >= MAX_PLAYERS || !isValidPlayerName(playerName)) return base;
+        if (base.players.some((player) => player.id === id)) return base;
+        if (base.players.some((player) => player.name.toLocaleLowerCase() === playerName.toLocaleLowerCase())) return base;
         return { ...base, players: [...base.players, { id, name: playerName, score: 0 }], activePlayerIds: [...base.activePlayerIds, id] };
       });
-      if (!cancelled) registeredRef.current = true;
+      const saved = normalizeGameState(result.snapshot.val()).players.some((player) => player.id === id && player.name === playerName);
+      if (saved) {
+        registeredRef.current = true;
+        sessionStorage.setItem('fonceday-player-id', id);
+        onRegistered(id);
+      } else {
+        registeredRef.current = true;
+        setRegistrationError(gameState.players.length >= MAX_PLAYERS ? 'Le lobby est complet.' : 'Ce pseudo est déjà utilisé. Choisis-en un autre.');
+      }
     }
-    registerPlayer();
-    return () => { cancelled = true; };
-  }, [playerName, gameState.players]);
+    void registerPlayer();
+  }, [playerId, playerName, registrationId, gameState.players, onRegistered]);
 
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
@@ -340,7 +394,8 @@ function LobbyPlayerView({ gameState, playerName }: { gameState: GameState; play
         <h1 className="text-[32px] font-bold font-heading text-gold">Lobby</h1>
         <div className="w-full rounded-2xl p-6 text-center bg-panel/80 border border-brand-green/27">
           <p className="text-sm mb-3 text-body">Bienvenue <b className="text-gold">{playerName}</b> !</p>
-          <p className="text-[13px] text-muted">En attente du démarrage... 🎮</p>
+          <p className={`text-[13px] ${registrationError ? 'text-danger' : 'text-muted'}`}>{registrationError || 'En attente du démarrage... 🎮'}</p>
+          {registrationError && <button onClick={onBack} className="mt-4 px-4 py-2 rounded-lg bg-[#64646433] text-body border border-line font-bold">Changer de pseudo</button>}
         </div>
         <div className="w-full rounded-xl p-4 bg-panel/60 border border-brand-green/13">
           <p className="text-gold font-bold mb-2">Joueurs connectés ({allPlayers.length})</p>
@@ -397,117 +452,110 @@ function SpectatorView({ gameState }: { gameState: GameState }) {
 
 function PlayerView({ gameState, banks, playerName }: { gameState: GameState; banks: QuestionBanks; playerName: string }) {
   const prevBuzzRef = useRef(gameState.currentBuzz);
-  const [timerLeft, setTimerLeft] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerLeft = useCountdown(gameState.timerEndsAt, gameState.phase === 'question' && !gameState.pause);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [numericInput, setNumericInput] = useState('');
-  const [submitted, setSubmitted] = useState(false);
+  const [textInput, setTextInput] = useState('');
+  const playerId = getPlayerId(gameState, playerName);
+  const question = getCurrentQuestion(gameState, banks);
+  const submission = gameState.submittedAnswers[playerId] || gameState.submittedAnswers[playerName];
+  const submitted = submission?.round === gameState.round && submission.questionIndex === gameState.questionIndex;
 
   useEffect(() => {
-    if (gameState.currentBuzz && !prevBuzzRef.current && gameState.currentBuzz.playerId !== getPlayerId(gameState, playerName)) {
+    if (gameState.currentBuzz && !prevBuzzRef.current && gameState.currentBuzz.playerId !== playerId) {
       playBuzzSound();
     }
     prevBuzzRef.current = gameState.currentBuzz;
-  }, [gameState.currentBuzz, playerName]);
+  }, [gameState.currentBuzz, playerId]);
 
-  useEffect(() => {
-    if (gameState.timerEndsAt && gameState.phase === 'question' && !gameState.pause) {
-      const update = () => {
-        const left = Math.max(0, Math.ceil((gameState.timerEndsAt! - Date.now()) / 1000));
-        setTimerLeft(left);
-        if (left <= 0) clearInterval(timerRef.current!);
+  async function submitAnswer(value: string) {
+    if (!question || submitted || !value.trim()) return;
+    const expectedRound = gameState.round;
+    const expectedIndex = gameState.questionIndex;
+    const submittedAt = timestamp();
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.pause || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
+      if (!current.activePlayerIds.includes(playerId) || !current.timerEndsAt || submittedAt > current.timerEndsAt) return current;
+      if (current.submittedAnswers[playerId]) return current;
+      return {
+        ...current,
+        submittedAnswers: {
+          ...current.submittedAnswers,
+          [playerId]: { value: value.trim(), submittedAt, round: expectedRound, questionIndex: expectedIndex },
+        },
       };
-      update();
-      timerRef.current = setInterval(update, 250);
-    } else {
-      setTimerLeft(0);
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [gameState.timerEndsAt, gameState.phase, gameState.pause]);
-
-  async function submitAnswer() {
-    if (!db || submitted || gameState.phase !== 'question' || gameState.timerEndsAt === null) return;
-    const question = getCurrentQuestion(gameState, banks);
-    if (!question) return;
-    const value = question.type === 'numeric' ? numericInput : question.type === 'qcm' ? (selectedOption !== null ? String.fromCharCode(65 + selectedOption) : '') : '';
-    const submittedAt = Date.now();
-    const saved = await runTransaction(ref(db, `${STATE_PATH}/submittedAnswers/${playerName}`), (current: unknown) => {
-      if (current && typeof current === 'object' && 'submittedAt' in (current as Record<string, unknown>)) return current;
-      return { value, submittedAt };
     });
-    if (saved) setSubmitted(true);
   }
 
-  function handleBuzz() {
-    if (gameState.currentBuzz || !db || gameState.phase !== 'question') return;
+  async function handleBuzz() {
+    if (gameState.currentBuzz || gameState.round !== 'buzzer') return;
     playBuzzSound();
-    const buzzRef = ref(db, `${STATE_PATH}/currentBuzz`);
-    runTransaction(buzzRef, (current: CurrentBuzz | null) => {
-      if (current) return current;
-      return { playerId: getPlayerId(gameState, playerName), name: playerName, ts: Date.now() };
+    const buzzedAt = timestamp();
+    const expectedIndex = gameState.questionIndex;
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.round !== 'buzzer' || current.questionIndex !== expectedIndex || current.pause || current.currentBuzz) return current;
+      if (!current.activePlayerIds.includes(playerId) || current.wrongBuzzers.includes(playerId)) return current;
+      return { ...current, currentBuzz: { playerId, name: playerName, ts: buzzedAt } };
     });
   }
 
   function handleValidate() {
-    if (gameState.phase !== 'question' || gameState.pause) return;
-    submitAnswer();
+    if (!question) return;
+    const value = question.type === 'qcm'
+      ? (selectedOption === null ? '' : String.fromCharCode(65 + selectedOption))
+      : question.type === 'numeric' ? numericInput : textInput;
+    void submitAnswer(value);
   }
 
-  function handleFiftyFifty() {
-    if (!db || gameState.phase !== 'question' || gameState.pause) return;
-    runTransaction(ref(db, `${STATE_PATH}/fiftyFiftyPlayers`), (current: string[] | null) => {
-      const list = current || [];
-      if (list.includes(playerName)) return list;
-      return [...list, playerName];
-    });
-    runTransaction(ref(db, `${STATE_PATH}/usedJokers/${playerName}`), (current: string[] | null) => {
-      const list = current || [];
-      if (list.includes('fifty-fifty')) return list;
-      return [...list, 'fifty-fifty'];
-    });
-  }
-
-  function handlePhoneAStranger() {
-    if (!db || gameState.phase !== 'question' || gameState.pause) return;
-    runTransaction(ref(db, `${STATE_PATH}/pause`), (_current: unknown) => ({
-      joker: 'phone-a-stranger',
-      playerName,
-      remainingMs: null,
-    }));
-    runTransaction(ref(db, `${STATE_PATH}/usedJokers/${playerName}`), (current: string[] | null) => {
-      const list = current || [];
-      if (list.includes('phone-a-stranger')) return list;
-      return [...list, 'phone-a-stranger'];
+  async function handleFiftyFifty() {
+    const expectedRound = gameState.round;
+    const expectedIndex = gameState.questionIndex;
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.pause || current.round === 'buzzer') return current;
+      if (current.round !== expectedRound || current.questionIndex !== expectedIndex || !current.activePlayerIds.includes(playerId)) return current;
+      const used = current.usedJokers[playerId] || [];
+      if (used.includes('fifty-fifty')) return current;
+      return {
+        ...current,
+        fiftyFiftyPlayers: [...current.fiftyFiftyPlayers.filter((id) => id !== playerId), playerId],
+        usedJokers: { ...current.usedJokers, [playerId]: [...used, 'fifty-fifty'] },
+      };
     });
   }
 
-  function handleOpponentHelp() {
-    if (!db || gameState.phase !== 'question' || gameState.pause) return;
-    runTransaction(ref(db, `${STATE_PATH}/pause`), (_current: unknown) => ({
-      joker: 'opponent-help',
-      playerName,
-    }));
-    runTransaction(ref(db, `${STATE_PATH}/usedJokers/${playerName}`), (current: string[] | null) => {
-      const list = current || [];
-      if (list.includes('opponent-help')) return list;
-      return [...list, 'opponent-help'];
+  async function handlePauseJoker(joker: 'phone-a-stranger' | 'opponent-help') {
+    const requestedAt = timestamp();
+    const expectedRound = gameState.round;
+    const expectedIndex = gameState.questionIndex;
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.pause || current.round === 'buzzer') return current;
+      if (current.round !== expectedRound || current.questionIndex !== expectedIndex || !current.activePlayerIds.includes(playerId)) return current;
+      const used = current.usedJokers[playerId] || [];
+      if (used.includes(joker)) return current;
+      const remainingMs = current.timerEndsAt ? Math.max(0, current.timerEndsAt - requestedAt) : 0;
+      return {
+        ...current,
+        timerEndsAt: null,
+        pause: { joker, playerName, remainingMs },
+        usedJokers: { ...current.usedJokers, [playerId]: [...used, joker] },
+      };
     });
   }
 
   const allPlayers = gameState.players || [];
   const playerScore = allPlayers.find((player) => player.name === playerName)?.score || 0;
   const playerRank = [...allPlayers].sort((a, b) => b.score - a.score).findIndex((player) => player.name === playerName) + 1;
-  const iBuzzed = gameState.currentBuzz && gameState.currentBuzz.playerId === getPlayerId(gameState, playerName);
-  const someoneElseBuzzed = gameState.currentBuzz && gameState.currentBuzz.playerId !== getPlayerId(gameState, playerName);
-  const alreadyWrong = (gameState.wrongBuzzers || []).includes(getPlayerId(gameState, playerName));
-  const question = getCurrentQuestion(gameState, banks);
-  const active = gameState.activePlayerIds.includes(getPlayerId(gameState, playerName));
-  const fiftyFiftyUsed = (gameState.usedJokers[playerName] || []).includes('fifty-fifty');
+  const iBuzzed = gameState.currentBuzz?.playerId === playerId;
+  const someoneElseBuzzed = !!gameState.currentBuzz && gameState.currentBuzz.playerId !== playerId;
+  const alreadyWrong = gameState.wrongBuzzers.includes(playerId);
+  const active = gameState.activePlayerIds.includes(playerId);
+  const usedJokers = gameState.usedJokers[playerId] || gameState.usedJokers[playerName] || [];
+  const fiftyFiftyUsed = usedJokers.includes('fifty-fifty');
   const fiftyFiftyHidden = fiftyFiftyUsed && question?.type === 'qcm';
-  const canUseJoker = gameState.phase === 'question' && !gameState.pause && !submitted;
+  const canSubmit = gameState.phase === 'question' && !gameState.pause && timerLeft > 0 && !submitted;
+  const canUseJoker = canSubmit && gameState.round !== 'buzzer';
 
-  const buzzDisabled = !!gameState.currentBuzz || alreadyWrong || gameState.phase === 'final';
+  const buzzDisabled = !!gameState.currentBuzz || alreadyWrong || gameState.round !== 'buzzer';
   const buzzBg = gameState.currentBuzz ? (iBuzzed ? 'bg-linear-to-br from-gold to-gold-dark' : 'bg-buzzed') : alreadyWrong ? 'bg-buzzed' : 'bg-linear-to-br from-brand-green to-brand-green-dark';
   const buzzText = 'text-dark-ink';
   const buzzShadow = !buzzDisabled ? 'shadow-[0_0_50px_rgba(57,255,106,0.55),0_10px_30px_rgba(0,0,0,0.5)]' : '';
@@ -519,37 +567,42 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
   function renderQuestionContent() {
     if (!question) return null;
     if (gameState.pause) return <div className="p-4 rounded-lg text-center bg-warn-bg border border-warn-border"><p className="text-gold-dark font-bold">⏸️ Pause — {gameState.pause.joker === 'phone-a-stranger' ? 'Appel à un inconnu' : 'Aide d\'un adversaire'} en cours...</p></div>;
-    if (gameState.phase === 'final') return <div className="p-4 rounded-lg text-center bg-gold/10 border border-gold-dark"><p className="text-gold-dark font-bold">🏆 Finale — Ta réponse orale sur Discord</p></div>;
-    if (gameState.phase === 'review') return null;
+    if (gameState.phase === 'review') return <AnswerReveal question={question} compact />;
+    if (gameState.phase === 'tiebreak') return <div className="p-4 rounded-lg text-center bg-gold/10 border border-gold-dark"><p className="text-gold font-bold">Départage en cours avec l'animateur</p></div>;
+    if (gameState.round === 'buzzer') return <div className="p-4 rounded-lg text-center bg-brand-green/8 border border-dashed border-brand-green/33"><p className="text-[13px] font-bold text-muted">Buzz puis réponds oralement sur Discord</p></div>;
+    if (!gameState.timerEndsAt) return <div className="p-4 rounded-lg text-center bg-black/30 border border-line"><p className="text-sm font-bold text-muted">En attente du lancement du timer</p></div>;
+    if (submitted) return <div className="p-4 rounded-lg text-center bg-brand-green/10 border border-brand-green"><p className="font-bold text-brand-green">Réponse envoyée</p><p className="mt-1 text-sm text-body">{submission.value}</p></div>;
 
     switch (question.type) {
       case 'qcm':
         return (
           <div className="flex flex-col gap-2">
             {question.options.map((option, index) => {
-              if (fiftyFiftyHidden && index !== question.correct && index !== question.correct - 1 && index !== question.correct + 1) return null;
+              const alternative = question.options.findIndex((_, optionIndex) => optionIndex !== question.correct);
+              if (fiftyFiftyHidden && index !== question.correct && index !== alternative) return null;
               return (
                 <button key={index} onClick={() => setSelectedOption(index)} className={`px-3 py-2 rounded-lg text-sm border text-left ${selectedOption === index ? 'bg-brand-green/25 border-brand-green text-brand-green font-bold' : 'bg-black/30 border-transparent text-body'}`}>
                   {String.fromCharCode(65 + index)}. {option}
                 </button>
               );
             })}
+            <button onClick={handleValidate} disabled={!canSubmit || selectedOption === null} className="mt-1 px-4 py-2 rounded-lg bg-brand-green text-dark-ink font-bold disabled:opacity-40">Valider</button>
           </div>
         );
       case 'numeric':
         return (
           <div className="flex gap-2">
             <input value={numericInput} onChange={(e) => setNumericInput(e.target.value)} placeholder="Ex : 42 ou 3,14" className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-line text-ink" />
-            <button onClick={handleValidate} disabled={submitted} className="px-4 py-2 rounded-lg bg-brand-green text-dark-ink font-bold disabled:opacity-40">Valider</button>
+            <button onClick={handleValidate} disabled={!canSubmit || !numericInput.trim()} className="px-4 py-2 rounded-lg bg-brand-green text-dark-ink font-bold disabled:opacity-40">Valider</button>
           </div>
         );
       default:
-        return <div className="p-4 rounded-lg text-center bg-brand-green/8 border border-dashed border-brand-green/33"><p className="text-[13px] font-bold text-muted">Réponds oralement sur Discord</p></div>;
+        return <div className="flex gap-2"><input value={textInput} onChange={(event) => setTextInput(event.target.value)} placeholder="Ta réponse" className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-black/30 border border-line text-ink" /><button onClick={handleValidate} disabled={!canSubmit || !textInput.trim()} className="px-4 py-2 rounded-lg bg-brand-green text-dark-ink font-bold disabled:opacity-40">Valider</button></div>;
     }
   }
 
   function renderJokers() {
-    if (gameState.phase !== 'question' || gameState.pause) return null;
+    if (gameState.phase !== 'question' || gameState.pause || gameState.round === 'buzzer' || submitted) return null;
     const isNumericOrQcm = question?.type === 'numeric' || question?.type === 'qcm';
     return (
       <div className="flex gap-2 flex-wrap">
@@ -558,13 +611,13 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
             50/50
           </button>
         )}
-        {isNumericOrQcm && !((gameState.usedJokers[playerName] || []).includes('phone-a-stranger')) && (
-          <button onClick={handlePhoneAStranger} disabled={!canUseJoker} className="px-3 py-2 rounded-lg text-sm font-bold bg-warn-bg text-gold-dark border border-warn-border disabled:opacity-40">
+        {isNumericOrQcm && !usedJokers.includes('phone-a-stranger') && (
+          <button onClick={() => void handlePauseJoker('phone-a-stranger')} disabled={!canUseJoker} className="px-3 py-2 rounded-lg text-sm font-bold bg-warn-bg text-gold-dark border border-warn-border disabled:opacity-40">
             Appel
           </button>
         )}
-        {isNumericOrQcm && !((gameState.usedJokers[playerName] || []).includes('opponent-help')) && (
-          <button onClick={handleOpponentHelp} disabled={!canUseJoker} className="px-3 py-2 rounded-lg text-sm font-bold bg-warn-bg text-gold-dark border border-warn-border disabled:opacity-40">
+        {isNumericOrQcm && !usedJokers.includes('opponent-help') && (
+          <button onClick={() => void handlePauseJoker('opponent-help')} disabled={!canUseJoker} className="px-3 py-2 rounded-lg text-sm font-bold bg-warn-bg text-gold-dark border border-warn-border disabled:opacity-40">
             Aide adverse
           </button>
         )}
@@ -587,12 +640,12 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
             <div className="mt-3">{renderJokers()}</div>
           </div>
         )}
-        {gameState.phase === 'question' && active && (
+        {gameState.phase === 'question' && gameState.round === 'buzzer' && active && (
           <button onClick={handleBuzz} disabled={buzzDisabled} className={`rounded-full flex items-center justify-center font-black transition-transform active:scale-95 disabled:active:scale-100 w-[200px] h-[200px] text-[28px] border-4 border-white/15 ${buzzBg} ${buzzText} ${buzzShadow}`}>
             {buzzLabel}
           </button>
         )}
-        {gameState.phase === 'question' && !active && (
+        {gameState.phase === 'question' && gameState.round === 'buzzer' && !active && (
           <div className="rounded-full flex items-center justify-center w-[200px] h-[200px] text-[28px] border-4 border-white/15 bg-buzzed text-muted font-black">ÉLIMINÉ</div>
         )}
         <p className="text-muted min-h-[20px] text-sm text-center">
@@ -613,6 +666,7 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
 
 function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartTest, onPreviewLive }: { gameState: GameState; banks: QuestionBanks; saveGameState: SaveGameState; onManageQuestions: () => void; onStartTest?: () => void; onPreviewLive?: () => void }) {
   const prevBuzzRef = useRef(gameState.currentBuzz);
+  const [tieSelection, setTieSelection] = useState<string[]>([]);
   useEffect(() => { if (gameState.currentBuzz && !prevBuzzRef.current) playBuzzSound(); prevBuzzRef.current = gameState.currentBuzz; }, [gameState.currentBuzz]);
 
   const allPlayers = gameState.players || [];
@@ -620,186 +674,96 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
   const active = getActivePlayers(gameState);
   const question = getCurrentQuestion(gameState, banks);
   const gameOver = gameState.phase === 'game-over';
+  const timerLeft = useCountdown(gameState.timerEndsAt, gameState.phase === 'question' && !gameState.pause);
 
-  if (!gameState.gameStarted) return <HostLobbyView gameState={gameState} saveGameState={saveGameState} onManageQuestions={onManageQuestions} onStartTest={onStartTest} onPreviewLive={onPreviewLive} />;
+  if (!gameState.gameStarted) return <HostLobbyView gameState={gameState} banks={banks} saveGameState={saveGameState} onManageQuestions={onManageQuestions} onStartTest={onStartTest} onPreviewLive={onPreviewLive} />;
 
   async function handleGoodAnswer() {
-    if (!gameState.currentBuzz) return;
-    const player = gameState.players.find((p) => p.id === gameState.currentBuzz.playerId);
-    if (!player) return;
-    await saveGameState({
-      ...gameState,
-      players: allPlayers.map((p) => p.id === player.id ? { ...p, score: p.score + 1 } : p),
-      currentBuzz: null,
-      phase: 'review',
-      wrongBuzzers: [],
+    const expectedBuzz = gameState.currentBuzz;
+    const expectedIndex = gameState.questionIndex;
+    if (!expectedBuzz) return;
+    await updateGameState((current) => {
+      const buzz = current.currentBuzz;
+      if (current.phase !== 'question' || current.round !== 'buzzer' || current.questionIndex !== expectedIndex || !buzz) return current;
+      if (buzz.playerId !== expectedBuzz.playerId || buzz.ts !== expectedBuzz.ts) return current;
+      if (!current.players.some((player) => player.id === buzz.playerId)) return current;
+      return {
+        ...current,
+        players: current.players.map((player) => player.id === buzz.playerId ? { ...player, score: player.score + 1 } : player),
+        currentBuzz: null,
+        phase: 'review',
+        wrongBuzzers: [],
+      };
     });
   }
 
   async function handleWrongAnswer() {
-    if (!gameState.currentBuzz) return;
-    await saveGameState({
-      ...gameState,
-      currentBuzz: null,
-      wrongBuzzers: [...(gameState.wrongBuzzers || []), gameState.currentBuzz.playerId],
+    const expectedBuzz = gameState.currentBuzz;
+    const expectedIndex = gameState.questionIndex;
+    if (!expectedBuzz) return;
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.round !== 'buzzer' || current.questionIndex !== expectedIndex || !current.currentBuzz) return current;
+      if (current.currentBuzz.playerId !== expectedBuzz.playerId || current.currentBuzz.ts !== expectedBuzz.ts) return current;
+      return {
+        ...current,
+        currentBuzz: null,
+        wrongBuzzers: [...new Set([...current.wrongBuzzers, current.currentBuzz.playerId])],
+      };
     });
   }
 
   async function handleRevealOptions() {
-    await saveGameState({ ...gameState, phase: 'review' });
-  }
-
-  async function handleShowAnswerReview() {
-    await saveGameState({ ...gameState, phase: 'review', currentBuzz: null });
-  }
-
-  function computeNumericWinners(): string[] {
-    if (!question || question.type !== 'numeric') return [];
-    const outcomes = active.map((player) => {
-      const submission = gameState.submittedAnswers[player.name];
-      if (!submission) return null;
-      const result = computeNumericOutcome(question, submission.value);
-      return { player, ...result, submittedAt: submission.submittedAt };
-    }).filter(Boolean) as Array<{ player: { id: string; name: string }; correct: boolean; diff: number; submittedAt: number }>;
-    if (!outcomes.length) return [];
-    const bestDiff = Math.min(...outcomes.map((o) => o.diff));
-    const winners = outcomes.filter((o) => o.diff === bestDiff);
-    if (winners.length === 1) return [winners[0].player.name];
-    return winners.sort((a, b) => a.submittedAt - b.submittedAt).slice(0, 1).map((o) => o.player.name);
-  }
-
-  function computeQcmWinners(): string[] {
-    if (!question || question.type !== 'qcm') return [];
-    return active
-      .map((player) => {
-        const submission = gameState.submittedAnswers[player.name];
-        if (!submission) return null;
-        return computeQcmOutcome(question, submission.value) ? player.name : null;
-      })
-      .filter(Boolean) as string[];
-  }
-
-  function computeFreeTextWinners(): string[] {
-    if (!question || question.type !== 'free-text') return [];
-    return active
-      .map((player) => {
-        const submission = gameState.submittedAnswers[player.name];
-        if (!submission) return null;
-        return computeFreeTextOutcome(question, submission.value) ? player.name : null;
-      })
-      .filter(Boolean) as string[];
-  }
-
-  function getNumericWinners(): string[] {
-    if (!question || question.type !== 'numeric') return [];
-    return computeNumericWinners();
-  }
-
-  function getQcmWinners(): string[] {
-    if (!question || question.type !== 'qcm') return [];
-    return computeQcmWinners();
-  }
-
-  function getFreeTextWinners(): string[] {
-    if (!question || question.type !== 'free-text') return [];
-    return computeFreeTextWinners();
+    const expectedRound = gameState.round;
+    const expectedIndex = gameState.questionIndex;
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.pause || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
+      return { ...current, phase: 'review', currentBuzz: null, timerEndsAt: null };
+    });
   }
 
   async function handleStartTimer() {
-    if (gameState.phase !== 'question' || gameState.timerEndsAt) return;
-    const dur = question ? timerDuration(question) : 15_000;
-    await saveGameState({ ...gameState, timerEndsAt: Date.now() + dur });
-  }
-
-  async function handleAutoResolve() {
-    if (!question || question.type !== 'numeric') return;
-    const winners = getNumericWinners();
-    const updatedPlayers = allPlayers.map((p) => winners.includes(p.name) ? { ...p, score: p.score + 1 } : p);
-    await saveGameState({
-      ...gameState,
-      players: updatedPlayers,
-      timerEndsAt: null,
-      phase: 'review',
-      currentBuzz: null,
+    if (!question) return;
+    const expectedRound = gameState.round;
+    const expectedIndex = gameState.questionIndex;
+    const endsAt = timestamp() + timerDuration(question);
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.round === 'buzzer' || current.timerEndsAt) return current;
+      if (current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
+      return { ...current, timerEndsAt: endsAt };
     });
   }
 
-  async function handleQcmAutoResolve() {
-    if (!question || question.type !== 'qcm') return;
-    const winners = getQcmWinners();
-    const updatedPlayers = allPlayers.map((p) => winners.includes(p.name) ? { ...p, score: p.score + 1 } : p);
-    await saveGameState({
-      ...gameState,
-      players: updatedPlayers,
-      timerEndsAt: null,
-      phase: 'review',
-      currentBuzz: null,
+  async function handleResolveAnswers() {
+    const expectedRound = gameState.round;
+    const expectedIndex = gameState.questionIndex;
+    const resolvedAt = timestamp();
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
+      const currentQuestion = getCurrentQuestion(current, banks);
+      if (!currentQuestion || current.round === 'buzzer') return current;
+      const allSubmitted = getActivePlayers(current).every((player) => Boolean(getSubmission(current, player.id, player.name)));
+      if (!allSubmitted && (!current.timerEndsAt || resolvedAt < current.timerEndsAt)) return current;
+      const winnerIds = getQuestionWinnerIds(current, currentQuestion);
+      const answerOutcomes = Object.fromEntries(getActivePlayers(current).map((player) => {
+        const playerSubmission = getSubmission(current, player.id, player.name);
+        return [player.id, { value: playerSubmission?.value || '', correct: winnerIds.includes(player.id), points: winnerIds.includes(player.id) ? 1 : 0 }];
+      }));
+      return {
+        ...current,
+        players: current.players.map((player) => winnerIds.includes(player.id) ? { ...player, score: player.score + 1 } : player),
+        finalScores: current.round === 'final'
+          ? Object.fromEntries(current.activePlayerIds.map((id) => [id, (current.finalScores[id] || 0) + (winnerIds.includes(id) ? 1 : 0)]))
+          : current.finalScores,
+        answerOutcomes,
+        timerEndsAt: null,
+        phase: 'review',
+        currentBuzz: null,
+      };
     });
-  }
-
-  async function handleFreeTextValidate(name: string, valid: boolean) {
-    if (!question || question.type !== 'free-text') return;
-    if (valid) {
-      const updatedPlayers = allPlayers.map((p) => p.name === name ? { ...p, score: p.score + 1 } : p);
-      await saveGameState({ ...gameState, players: updatedPlayers });
-    }
   }
 
   async function handleNextQuestion() {
-    const round = gameState.round;
-    const roundQuestions = questionsForRound(banks, round);
-    const nextIndex = gameState.questionIndex + 1;
-    const endOfRound = nextIndex >= roundQuestions.length;
-    let nextRound = round;
-    let nextIndex2 = nextIndex;
-    let activePlayerIds = gameState.activePlayerIds;
-    let lastElimination = gameState.lastElimination;
-    const plan = getEliminationPlan(gameState);
-
-    if (endOfRound) {
-      if (round === 'buzzer') {
-        const toEliminate = plan.afterBuzzer;
-        if (toEliminate > 0) {
-          const { kept, eliminated } = applyElimination(gameState, toEliminate);
-          activePlayerIds = kept;
-          lastElimination = { round: 'buzzer', eliminatedNames: eliminated, remaining: kept.length };
-        }
-        nextRound = 'simultaneous';
-        nextIndex2 = 0;
-      } else if (round === 'simultaneous') {
-        const toEliminate = plan.afterSimultaneous;
-        if (toEliminate > 0) {
-          const { kept, eliminated } = applyElimination(gameState, toEliminate);
-          activePlayerIds = kept;
-          lastElimination = { round: 'simultaneous', eliminatedNames: eliminated, remaining: kept.length };
-        }
-        nextRound = 'final';
-        nextIndex2 = 0;
-      } else {
-        const stillActive = activePlayerIds.filter((id) => gameState.players.some((p) => p.id === id));
-        if (stillActive.length <= 1) {
-          const winnerId = stillActive[0] || gameState.players[0]?.id;
-          await saveGameState({ ...gameState, phase: 'game-over', winnerId });
-          return;
-        }
-        nextIndex2 = (gameState.questionIndex + 1) % roundQuestions.length;
-      }
-    }
-
-    await saveGameState({
-      ...gameState,
-      currentBuzz: null,
-      phase: 'question',
-      round: nextRound,
-      questionIndex: nextIndex2,
-      activePlayerIds,
-      lastElimination,
-      wrongBuzzers: [],
-      submittedAnswers: {},
-      answerOutcomes: {},
-      timerEndsAt: null,
-      pause: null,
-    });
+    await updateGameState((current) => advanceGame(current, banks));
   }
 
   async function handleResetGame() {
@@ -807,15 +771,27 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
   }
 
   async function handleSkipQuestion() {
-    await handleNextQuestion();
+    const expectedRound = gameState.round;
+    const expectedIndex = gameState.questionIndex;
+    await updateGameState((current) => {
+      if (current.phase !== 'question' || current.pause || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
+      return advanceGame({ ...current, phase: 'review' }, banks);
+    });
   }
 
   async function handleCancelPause() {
-    await saveGameState({ ...gameState, pause: null, timerEndsAt: null });
+    const resumedAt = timestamp();
+    await updateGameState((current) => {
+      if (!current.pause) return current;
+      const remainingMs = current.pause.remainingMs || 0;
+      return { ...current, pause: null, timerEndsAt: remainingMs > 0 ? resumedAt + remainingMs : null };
+    });
   }
 
-  async function handleFreeTextNext(name: string) {
-    await handleNextQuestion();
+  async function handleResolveTie() {
+    const selected = [...tieSelection];
+    await updateGameState((current) => resolveEliminationTie(current, selected));
+    setTieSelection([]);
   }
 
   return (
@@ -829,7 +805,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
             </h1>
             <p className="text-muted mt-1">{active.length} joueur(s) actif(s) en course</p>
           </div>
-          <button onClick={onManageQuestions} className="py-2 px-5 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-gold to-gold-dark text-dark-ink">📝 Gérer les questions</button>
+          <button disabled title="Les questions sont verrouillées pendant la partie" className="py-2 px-5 rounded-xl font-bold bg-[#64646433] text-muted border border-line opacity-60">Questions verrouillées</button>
         </div>
         {gameState.lastElimination && (
           <div className="rounded-xl p-4 bg-danger-strong/12 border border-danger-dark">
@@ -837,7 +813,21 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
             <p className="text-body text-[13px]">Il reste {gameState.lastElimination.remaining} joueur(s) en course.</p>
           </div>
         )}
-        {question && (
+        {gameState.phase === 'tiebreak' && gameState.pendingElimination && (
+          <div className="rounded-2xl p-6 bg-warn-bg border-2 border-warn-border">
+            <p className="text-gold text-lg font-bold mb-2">Égalité au seuil d'élimination</p>
+            <p className="text-body text-sm mb-4">Fais un départage oral, puis sélectionne exactement {gameState.pendingElimination.eliminateCount} joueur(s) à éliminer.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+              {gameState.pendingElimination.candidateIds.map((id) => {
+                const player = gameState.players.find((item) => item.id === id);
+                const selected = tieSelection.includes(id);
+                return <button key={id} onClick={() => setTieSelection((current) => selected ? current.filter((item) => item !== id) : [...current, id])} className={`p-3 rounded-lg border text-left font-bold ${selected ? 'border-danger bg-danger-strong/20 text-danger' : 'border-line bg-black/30 text-body'}`}>{player?.name || id}</button>;
+              })}
+            </div>
+            <button onClick={handleResolveTie} disabled={tieSelection.length !== gameState.pendingElimination.eliminateCount} className="w-full py-3 rounded-xl font-bold bg-brand-green text-dark-ink disabled:opacity-40">Valider le départage</button>
+          </div>
+        )}
+        {question && gameState.phase !== 'tiebreak' && !gameOver && (
           <div className="w-full rounded-2xl p-6 bg-panel/80 border border-brand-green/27">
             <p className="text-gold text-lg font-bold mb-3">{gameState.phase === 'review' ? '📚 DÉBRIEFING' : 'Question'}</p>
             <p className="text-ink text-base font-bold mb-3">{question.question}</p>
@@ -848,13 +838,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
               </p>
             </div>
             {gameState.phase === 'review' ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {question.options.map((option, idx) => (
-                  <div key={idx} className={`p-4 rounded-lg border ${idx === question.correct ? 'bg-brand-green/25 border-2 border-brand-green' : 'bg-black/30 border-[#64646433]'}`}>
-                    <p className={`text-sm ${idx === question.correct ? 'text-brand-green font-bold' : 'text-body font-normal'}`}><b>{String.fromCharCode(65 + idx)}.</b> {option} {idx === question.correct && '✅'}</p>
-                  </div>
-                ))}
-              </div>
+              <AnswerReveal question={question} />
             ) : gameState.phase === 'question' ? (
               question.type === 'qcm' ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -865,14 +849,14 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
               ) : question.type === 'numeric' ? (
                 <div className="p-6 rounded-lg text-center bg-brand-green/10 border-2 border-dashed border-brand-green">
                   <p className="text-muted text-sm font-bold">⏱️ Temps de réponse — Saisie numérique</p>
-                  {gameState.timerEndsAt && <p className="text-brand-green font-bold mt-2">{Math.max(0, Math.ceil((gameState.timerEndsAt - Date.now()) / 1000))}s restant{Math.ceil((gameState.timerEndsAt - Date.now()) / 1000) > 1 ? 's' : ''}</p>}
+                  {timerLeft > 0 && <p className="text-brand-green font-bold mt-2">{timerLeft}s restantes</p>}
                 </div>
               ) : (
                 <div className="p-6 rounded-lg text-center bg-brand-green/10 border-2 border-dashed border-brand-green">
                   <p className="text-muted text-sm font-bold mb-3">❓ Réponse libre — Validation animatrice</p>
                   <div className="flex flex-col gap-2">
                     {active.map((player) => {
-                      const submission = gameState.submittedAnswers[player.name];
+                      const submission = getSubmission(gameState, player.id, player.name);
                       if (!submission) return null;
                       return (
                         <div key={player.id} className="flex items-center justify-between p-3 rounded-lg bg-black/30">
@@ -880,10 +864,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
                             <span className="text-gold font-bold">{player.name}</span>
                             <span className="text-body ml-2">→ {submission.value}</span>
                           </div>
-                          <div className="flex gap-2">
-                            <button onClick={() => handleFreeTextValidate(player.name, true)} className="px-3 py-1 rounded-lg bg-brand-green text-dark-ink font-bold text-sm">Correct</button>
-                            <button onClick={() => handleFreeTextValidate(player.name, false)} className="px-3 py-1 rounded-lg bg-danger-strong/20 text-danger font-bold text-sm">Incorrect</button>
-                          </div>
+                          <span className={`font-bold ${computeFreeTextOutcome(question, submission.value) ? 'text-brand-green' : 'text-danger'}`}>{computeFreeTextOutcome(question, submission.value) ? 'Correct' : 'Incorrect'}</span>
                         </div>
                       );
                     })}
@@ -899,6 +880,8 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
               <p className="text-muted text-sm mb-3 font-bold">📚 DÉBRIEFING</p>
               <p className="text-gold text-sm mb-3">La bonne réponse est en évidence ci-dessus. Débattez ! 💬</p>
             </>
+          ) : gameState.pause ? (
+            <button onClick={handleCancelPause} className="w-full py-4 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">▶️ Continuer ({Math.ceil((gameState.pause.remainingMs || 0) / 1000)}s)</button>
           ) : gameState.currentBuzz ? (
             <>
               <p className="text-muted text-sm mb-2">Buzzé</p>
@@ -916,7 +899,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
                 <div className="mb-3">
                   <p className="text-body text-sm mb-2">Réponses reçues :</p>
                   {active.map((player) => {
-                    const submission = gameState.submittedAnswers[player.name];
+                    const submission = getSubmission(gameState, player.id, player.name);
                     if (!submission) return null;
                     const outcome = computeNumericOutcome(question, submission.value);
                     return (
@@ -928,9 +911,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
                     );
                   })}
                   <div className="flex gap-2 mt-2">
-                    {gameState.timerEndsAt && (
-                      <button onClick={handleAutoResolve} className="flex-1 py-2 rounded-lg bg-brand-green text-dark-ink font-bold">Résoudre ({getNumericWinners().join(', ') || 'personne'})</button>
-                    )}
+                    {gameState.timerEndsAt && <button onClick={handleResolveAnswers} className="flex-1 py-2 rounded-lg bg-brand-green text-dark-ink font-bold">Résoudre les réponses</button>}
                   </div>
                 </div>
               )}
@@ -938,7 +919,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
                 <div className="mb-3">
                   <p className="text-body text-sm mb-2">Réponses reçues :</p>
                   {active.map((player) => {
-                    const submission = gameState.submittedAnswers[player.name];
+                    const submission = getSubmission(gameState, player.id, player.name);
                     if (!submission) return null;
                     const correct = computeQcmOutcome(question, submission.value);
                     return (
@@ -950,22 +931,19 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
                     );
                   })}
                   <div className="flex gap-2 mt-2">
-                    {gameState.timerEndsAt && (
-                      <button onClick={handleQcmAutoResolve} className="flex-1 py-2 rounded-lg bg-brand-green text-dark-ink font-bold">Résoudre ({getQcmWinners().join(', ') || 'personne'})</button>
-                    )}
+                    {gameState.timerEndsAt && <button onClick={handleResolveAnswers} className="flex-1 py-2 rounded-lg bg-brand-green text-dark-ink font-bold">Résoudre les réponses</button>}
                   </div>
                 </div>
               )}
+              {question?.type === 'free-text' && gameState.timerEndsAt && <button onClick={handleResolveAnswers} className="w-full mb-3 py-2 rounded-lg bg-brand-green text-dark-ink font-bold">Résoudre les réponses</button>}
               <div className="flex gap-3">
                 <button onClick={handleRevealOptions} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-warn-bg text-gold-dark border border-warn-border">Montrer la réponse 👀</button>
                 <button onClick={handleSkipQuestion} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-[#64646433] text-muted border border-line">Passer ⏭️</button>
-                {(question?.type === 'numeric' || question?.type === 'qcm') && !gameState.timerEndsAt && (
+                {gameState.round !== 'buzzer' && !gameState.timerEndsAt && (
                   <button onClick={handleStartTimer} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">▶️ Commencer le timer</button>
                 )}
               </div>
             </>
-          ) : gameState.pause ? (
-            <button onClick={handleCancelPause} className="w-full py-4 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">▶️ Continuer</button>
           ) : null}
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -1020,11 +998,31 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
 
 // ============ HOST LOBBY ============
 
-function HostLobbyView({ gameState, saveGameState, onManageQuestions, onStartTest, onPreviewLive }: { gameState: GameState; saveGameState: SaveGameState; onManageQuestions?: () => void; onStartTest?: () => void; onPreviewLive?: () => void }) {
+function HostLobbyView({ gameState, banks, saveGameState, onManageQuestions, onStartTest, onPreviewLive }: { gameState: GameState; banks: QuestionBanks; saveGameState: SaveGameState; onManageQuestions?: () => void; onStartTest?: () => void; onPreviewLive?: () => void }) {
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
+  const playerCountValid = allPlayers.length >= MIN_PLAYERS && allPlayers.length <= MAX_PLAYERS;
+  const banksValid = banks.buzzer.length > 0 && banks.simultaneous.length > 0 && banks.final.length > 0;
   async function startGame() {
-    await saveGameState({ ...gameState, gameStarted: true, activePlayerIds: allPlayers.map((player) => player.id), eliminationPlan: calculateEliminations(allPlayers.length), phase: 'question', round: 'buzzer', questionIndex: 0 });
+    if (!playerCountValid || !banksValid) return;
+    await updateGameState((current) => {
+      if (current.gameStarted || current.players.length < MIN_PLAYERS || current.players.length > MAX_PLAYERS) return current;
+      return {
+        ...current,
+        gameStarted: true,
+        activePlayerIds: current.players.map((player) => player.id),
+        eliminationPlan: calculateEliminations(current.players.length),
+        phase: 'question',
+        round: 'buzzer',
+        questionIndex: 0,
+        currentBuzz: null,
+        submittedAnswers: {},
+        answerOutcomes: {},
+        finalScores: {},
+        questionBanks: banks,
+        winnerId: null,
+      };
+    });
   }
   async function resetGame() {
     if (window.confirm('Êtes-vous sûr de vouloir réinitialiser le jeu ?')) await saveGameState(createGameState());
@@ -1053,10 +1051,12 @@ function HostLobbyView({ gameState, saveGameState, onManageQuestions, onStartTes
           )}
         </div>
         <div className="flex flex-col gap-3">
-          <button onClick={startGame} disabled={allPlayers.length === 0} className="w-full py-5 rounded-xl font-bold text-lg transition-transform active:scale-95 disabled:opacity-40 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">🚀 Démarrer le jeu</button>
+          {!playerCountValid && <p className="text-danger text-sm text-center">Il faut entre {MIN_PLAYERS} et {MAX_PLAYERS} joueurs pour démarrer.</p>}
+          {!banksValid && <p className="text-danger text-sm text-center">Chaque manche doit contenir au moins une question.</p>}
+          <button onClick={startGame} disabled={!playerCountValid || !banksValid} className="w-full py-5 rounded-xl font-bold text-lg transition-transform active:scale-95 disabled:opacity-40 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">🚀 Démarrer le jeu</button>
           <button onClick={resetGame} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-reset-bg text-gold-dark border border-reset-border">Réinitialiser</button>
           {onManageQuestions && <button onClick={onManageQuestions} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-gold to-gold-dark text-dark-ink">📝 Gérer les questions</button>}
-          {onStartTest && <button onClick={onStartTest} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-warn-bg text-gold-dark border border-warn-border">🤖 Mode test (4 bots)</button>}
+          {onStartTest && <button onClick={onStartTest} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-warn-bg text-gold-dark border border-warn-border">Simuler les effectifs</button>}
           {onPreviewLive && <button onClick={onPreviewLive} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-gold/80 to-gold-dark/80 text-dark-ink">👁️ Preview Live</button>}
         </div>
         <p className="text-line text-xs text-center">Partage ce lien avec tes joueurs. Une fois prêt, clique "Démarrer le jeu". <br />Les joueurs qui rejoignent après ne pourront que regarder les stats. 👀</p>
@@ -1067,104 +1067,25 @@ function HostLobbyView({ gameState, saveGameState, onManageQuestions, onStartTes
 
 // ============ TEST MODE ============
 
-function TestModeView({ gameState, banks, saveGameState, onExit }: { gameState: GameState; banks: QuestionBanks; saveGameState: SaveGameState; onExit: () => void }) {
-  const prevBuzzRef = useRef(gameState.currentBuzz);
-  const [simulating, setSimulating] = useState(false);
-  useEffect(() => { if (!gameState.gameStarted && gameState.players.length >= 4) { const activePlayerIds = gameState.players.map((player) => player.id); saveGameState({ ...gameState, gameStarted: true, activePlayerIds, phase: 'question', round: 'buzzer', questionIndex: 0 }); } }, [gameState.gameStarted, gameState.players, saveGameState]);
-  useEffect(() => { if (gameState.currentBuzz && !prevBuzzRef.current && !simulating) playBuzzSound(); prevBuzzRef.current = gameState.currentBuzz; }, [gameState.currentBuzz, simulating]);
-  useEffect(() => {
-    if (!gameState.currentBuzz || simulating) return;
-    const delay = 1000 + Math.random() * 3000;
-    const timer = setTimeout(async () => {
-      setSimulating(true);
-      const winner = gameState.currentBuzz.name;
-      const winnerId = gameState.currentBuzz.playerId;
-      const updatedPlayers = gameState.players.map((p) => p.id === winnerId ? { ...p, score: p.score + 1 } : p);
-      await saveGameState({ ...gameState, players: updatedPlayers, currentBuzz: null, phase: 'review', wrongBuzzers: [], activePlayerIds: gameState.activePlayerIds });
-      setSimulating(false);
-    }, delay);
-    return () => clearTimeout(timer);
-  }, [gameState.currentBuzz, gameState.players, gameState.wrongBuzzers, saveGameState, simulating]);
-  const allPlayers = gameState.players || [];
-  const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
-  const question = getCurrentQuestion(gameState, banks);
-  const gameOver = gameState.phase === 'game-over';
-  async function handleNext() {
-    const round = gameState.round;
-    const roundQuestions = questionsForRound(banks, round);
-    const nextIndex = gameState.questionIndex + 1;
-    const endOfRound = nextIndex >= roundQuestions.length;
-    let nextRound = round;
-    let nextIndex2 = nextIndex;
-    let activePlayerIds = gameState.activePlayerIds;
-    if (endOfRound) {
-      if (round === 'buzzer') { nextRound = 'simultaneous'; nextIndex2 = 0; }
-      else if (round === 'simultaneous') { nextRound = 'final'; nextIndex2 = 0; }
-      else { nextIndex2 = (gameState.questionIndex + 1) % roundQuestions.length; }
-    }
-    await saveGameState({ ...gameState, currentBuzz: null, phase: 'question', round: nextRound, questionIndex: nextIndex2, activePlayerIds, wrongBuzzers: [], submittedAnswers: {}, answerOutcomes: {} });
-  }
-  async function handleReset() { await saveGameState(createGameState()); }
+function TestModeView({ onExit }: { onExit: () => void }) {
+  const simulations = Array.from({ length: MAX_PLAYERS - MIN_PLAYERS + 1 }, (_, index) => {
+    const players = MIN_PLAYERS + index;
+    const plan = calculateEliminations(players);
+    return { players, ...plan, finalists: players - plan.afterBuzzer - plan.afterSimultaneous };
+  });
   return (
     <div className="app-bg min-h-screen w-full p-4 sm:p-6">
       <Glow />
-      <div className="relative z-10 max-w-6xl mx-auto flex flex-col gap-6">
+      <div className="relative z-10 max-w-2xl mx-auto flex flex-col gap-6">
         <div className="flex justify-between items-center">
-          <h1 className="text-2xl font-bold font-heading text-gold">🤖 Mode test</h1>
+          <h1 className="text-2xl font-bold font-heading text-gold">Simulation des effectifs</h1>
           <button onClick={onExit} className="px-4 py-2 rounded-lg text-sm font-bold transition-opacity hover:opacity-70 bg-[#64646433] text-muted border border-line">← Retour</button>
         </div>
-        <p className="text-muted text-sm">Simulation automatique avec {TEST_BOTS.length} bots. Le jeu avance tout seul.</p>
-        {question && (
-          <div className="w-full rounded-2xl p-6 bg-panel/80 border border-brand-green/27">
-            <p className="text-gold text-lg font-bold mb-3">{gameState.phase === 'review' ? '📚 DÉBRIEFING' : 'Question'}</p>
-            <p className="text-ink text-base font-bold mb-3">{question.question}</p>
-            <div className="mb-4 rounded-lg p-3 bg-gold/10 border border-gold/40">
-              <p className="text-gold-dark text-[11px] font-bold mb-1 tracking-[0.5px]">👁️ RÉPONSE (visible uniquement par toi)</p>
-              <p className="text-gold text-sm font-bold">{question.type === 'qcm' ? `${String.fromCharCode(65 + question.correct)}. ${question.options[question.correct]}` : `Cible : ${question.numericAnswer}`}</p>
-            </div>
-            {gameState.phase === 'review' ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {question.options.map((option, idx) => (
-                  <div key={idx} className={`p-4 rounded-lg border ${idx === question.correct ? 'bg-brand-green/25 border-2 border-brand-green' : 'bg-black/30 border-[#64646433]'}`}>
-                    <p className={`text-sm ${idx === question.correct ? 'text-brand-green font-bold' : 'text-body font-normal'}`}><b>{String.fromCharCode(65 + idx)}.</b> {option} {idx === question.correct && '✅'}</p>
-                  </div>
-                ))}
-              </div>
-            ) : gameState.phase === 'question' ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {question.options.map((option, idx) => (
-                  <div key={idx} className="p-4 rounded-lg bg-black/30 border border-[#64646433]"><p className="text-body text-sm"><b>{String.fromCharCode(65 + idx)}.</b> {option}</p></div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        )}
-        {gameState.currentBuzz && (
-          <div className="rounded-2xl p-6 text-center bg-linear-to-br from-brand-green/20 to-brand-green/5 border-2 border-brand-green">
-            <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">BUZZÉ</p>
-            <p className="text-4xl font-black text-brand-green [text-shadow:0_0_20px_rgba(57,255,106,0.5)]">{gameState.currentBuzz.name}</p>
-            {simulating && <p className="text-muted text-sm mt-2">🤖 Bot en train de répondre...</p>}
-          </div>
-        )}
-        {gameState.wrongBuzzers.length > 0 && <div className="rounded-2xl p-4 bg-black/30 border border-danger-dark/33"><p className="text-danger text-sm">❌ Déjà écarté(s) : {gameState.wrongBuzzers.map((id) => gameState.players.find((p) => p.id === id)?.name).join(', ')}</p></div>}
-        <div className="rounded-xl p-4 bg-panel/50 border border-brand-green/13">
-          <p className="text-gold font-bold mb-3">Classement</p>
-          <div className="flex flex-col gap-2">
-            {sorted.map((player, idx) => (
-              <div key={player.id} className={`flex justify-between items-center p-3 rounded-lg bg-black/30 ${isPlayerEliminated(gameState, player.name) ? 'opacity-50' : ''}`}>
-                <span className="text-gold font-medium">{player.name}</span>
-                <span className="text-brand-green font-bold">{player.score}</span>
-              </div>
-            ))}
-          </div>
+        <p className="text-muted text-sm">Cette simulation est locale et ne modifie pas la partie Firebase.</p>
+        <div className="rounded-xl overflow-hidden border border-brand-green/20 bg-panel/80">
+          <div className="grid grid-cols-4 gap-2 p-3 text-xs font-bold text-muted border-b border-line"><span>Joueurs</span><span>Buzzer</span><span>Simultanée</span><span>Finale</span></div>
+          {simulations.map((row) => <div key={row.players} className="grid grid-cols-4 gap-2 p-3 text-sm text-body border-b border-line/40 last:border-0"><span className="font-bold text-gold">{row.players}</span><span>-{row.afterBuzzer}</span><span>-{row.afterSimultaneous}</span><span className="font-bold text-brand-green">{row.finalists}</span></div>)}
         </div>
-        {gameState.phase === 'review' && <button onClick={handleNext} className="w-full py-4 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">✨ Question suivante</button>}
-        {gameOver && (
-          <div className="rounded-xl p-6 text-center bg-gold/10 border-2 border-gold">
-            <p className="text-gold text-2xl font-bold mb-2">🎉 TEST TERMINÉ ! 🎉</p>
-            <button onClick={handleReset} className="mt-4 w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-reset-bg text-gold-dark border border-reset-border">Relancer le test</button>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -1181,7 +1102,11 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
   const myScore = eliminatedPlayerName ? allPlayers.find((player) => player.name === eliminatedPlayerName)?.score || 0 : 0;
   const myRank = eliminatedPlayerName ? sorted.findIndex((player) => player.name === eliminatedPlayerName) + 1 : 0;
   const active = getActivePlayers(gameState);
-  const timerDisplay = gameState.timerEndsAt && gameState.phase === 'question' && !gameState.pause ? Math.max(0, Math.ceil((gameState.timerEndsAt - Date.now()) / 1000)) : 0;
+  const isWaiting = !gameState.gameStarted || gameState.phase === 'lobby';
+  const isGameOver = gameState.phase === 'game-over';
+  const winner = allPlayers.find((player) => player.id === gameState.winnerId);
+  const viewerEliminated = eliminatedPlayerName ? !gameState.activePlayerIds.includes(getPlayerId(gameState, eliminatedPlayerName)) : false;
+  const timerDisplay = useCountdown(gameState.timerEndsAt, gameState.phase === 'question' && !gameState.pause);
 
   return (
     <div className="app-bg min-h-screen w-full p-4 sm:p-8">
@@ -1192,28 +1117,61 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
             <p className="text-brand-green text-xs font-bold tracking-[1px]">🔴 LIVE</p>
           </div>
           <h1 className="text-gold text-4xl sm:text-5xl font-bold font-heading mb-2">Questions pour un Fonceday</h1>
-          <p className="text-muted text-sm">{phaseLabel(gameState)} • Question {questionNum}</p>
+          <p className="text-muted text-sm">{liveStatusLabel(gameState)}</p>
         </div>
-        {eliminatedPlayerName && (
+        {eliminatedPlayerName && viewerEliminated && !isGameOver && (
           <div className="rounded-2xl p-5 mb-8 text-center bg-danger-strong/12 border-2 border-danger-dark">
             <p className="text-danger font-bold text-lg mb-1">❌ {eliminatedPlayerName}, tu as été éliminé de la partie</p>
             <p className="text-body text-sm">Tu peux continuer à suivre la partie en direct ci-dessous ! 📊</p>
           </div>
         )}
+        <div className="mb-8 grid grid-cols-3 gap-2 sm:gap-4" aria-label="Progression de la partie">
+          {(['buzzer', 'simultaneous', 'final'] as QuestionRound[]).map((round, index) => {
+            const rounds: QuestionRound[] = ['buzzer', 'simultaneous', 'final'];
+            const currentRound = rounds.indexOf(gameState.round);
+            const done = gameState.gameStarted && (index < currentRound || isGameOver);
+            const current = gameState.gameStarted && !isGameOver && index === currentRound;
+            return (
+              <div key={round} className={`min-w-0 border-t-4 pt-3 ${current ? 'border-brand-green' : done ? 'border-gold' : 'border-line'}`}>
+                <p className={`text-[10px] sm:text-xs font-bold ${current ? 'text-brand-green' : done ? 'text-gold' : 'text-faint'}`}>{done ? 'TERMINÉE' : current ? 'EN COURS' : 'À VENIR'}</p>
+                <p className="mt-1 text-xs sm:text-base font-bold text-ink break-words">{roundLabel(round)}</p>
+              </div>
+            );
+          })}
+        </div>
+        {isWaiting && (
+          <div className="mb-8 rounded-3xl p-8 sm:p-12 text-center bg-panel/90 border-2 border-brand-green/27">
+            <p className="text-brand-green text-xs font-bold tracking-[1px] mb-3">EN ATTENTE</p>
+            <h2 className="text-gold text-3xl sm:text-4xl font-heading font-bold mb-3">Le jeu n'a pas encore commencé</h2>
+            <p className="text-body">Les joueurs peuvent rejoindre la partie. Le direct se mettra à jour automatiquement au lancement.</p>
+            <p className="mt-6 text-brand-green font-bold">{allPlayers.length} joueur{allPlayers.length > 1 ? 's' : ''} inscrit{allPlayers.length > 1 ? 's' : ''}</p>
+          </div>
+        )}
+        {isGameOver && (
+          <div className="mb-8 rounded-3xl p-8 sm:p-12 text-center bg-panel/90 border-2 border-gold">
+            <p className="text-gold text-xs font-bold tracking-[1px] mb-3">PARTIE TERMINÉE</p>
+            <h2 className="text-ink text-3xl sm:text-5xl font-heading font-bold mb-3">{winner ? `${winner.name} remporte la partie` : 'La partie est terminée'}</h2>
+            {winner && <p className="text-brand-green text-2xl font-black">{gameState.finalScores[winner.id] ?? winner.score} pts en finale</p>}
+          </div>
+        )}
+        {gameState.phase === 'tiebreak' && gameState.pendingElimination && (
+          <div className="mb-8 rounded-3xl p-8 text-center bg-warn-bg border-2 border-warn-border">
+            <p className="text-gold text-xs font-bold tracking-[1px] mb-2">DÉPARTAGE</p>
+            <p className="text-ink text-2xl font-heading font-bold">Égalité au seuil d'élimination</p>
+            <p className="text-body mt-2">L'animateur départage {gameState.pendingElimination.candidateIds.map((id) => gameState.players.find((player) => player.id === id)?.name).filter(Boolean).join(', ')}.</p>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 flex flex-col gap-6">
-            {question && (
+            {!isWaiting && !isGameOver && gameState.phase !== 'tiebreak' && question && (
               <div className="rounded-3xl p-8 bg-panel/90 border-2 border-brand-green/27">
-                <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">{gameState.phase === 'review' ? '📚 DÉBRIEFING' : 'QUESTION'}</p>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <p className="text-muted text-xs font-bold tracking-[1px]">{gameState.phase === 'review' ? '📚 RÉPONSE' : 'QUESTION EN COURS'}</p>
+                  <p className="text-brand-green text-xs font-bold">Question {questionNum}</p>
+                </div>
                 <p className="text-ink text-[28px] font-bold mb-5 leading-[1.4]">{question.question}</p>
                 {gameState.phase === 'review' ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {question.options.map((option, idx) => (
-                      <div key={idx} className={`p-5 rounded-xl border ${idx === question.correct ? 'bg-brand-green/25 border-2 border-brand-green' : 'bg-black/30 border-[#64646433]'}`}>
-                        <p className={`text-base ${idx === question.correct ? 'text-brand-green font-bold' : 'text-body font-normal'}`}><span className="font-bold mr-2">{String.fromCharCode(65 + idx)}.</span>{option} {idx === question.correct && '✅'}</p>
-                      </div>
-                    ))}
-                  </div>
+                  <AnswerReveal question={question} />
                 ) : gameState.phase === 'question' && question.type === 'qcm' ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {question.options.map((option, idx) => (
@@ -1224,47 +1182,31 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
                   <div className="p-8 rounded-xl text-center bg-brand-green/10 border-2 border-dashed border-brand-green">
                     <p className="text-muted text-lg font-bold">⏱️ Chiffre le plus proche</p>
                     {timerDisplay > 0 && <p className="text-brand-green text-3xl font-black mt-2">{timerDisplay}s</p>}
-                    {gameState.phase === 'review' && (
-                      <div className="mt-4">
-                        {active.map((player) => {
-                          const submission = gameState.submittedAnswers[player.name];
-                          if (!submission) return null;
-                          const outcome = computeNumericOutcome(question, submission.value);
-                          return (
-                            <div key={player.id} className="flex justify-between items-center p-3 rounded-lg bg-black/30 mt-2">
-                              <span className="text-gold">{player.name}</span>
-                              <span className="text-body">{submission.value}</span>
-                              <span className={`font-bold ${outcome.correct ? 'text-brand-green' : 'text-danger'}`}>écart : {outcome.diff === Infinity ? '?' : outcome.diff}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
                   </div>
                 ) : gameState.phase === 'question' ? (
                   <div className="p-8 rounded-xl text-center bg-brand-green/10 border-2 border-dashed border-brand-green"><p className="text-muted text-lg font-bold">❓ Réponse libre</p></div>
                 ) : null}
               </div>
             )}
-            {gameState.lastElimination && (
+            {!isWaiting && gameState.lastElimination && (
               <div className="rounded-2xl p-5 bg-danger-strong/15 border-2 border-danger-dark">
                 <p className="text-danger font-bold text-base mb-1">🚫 Éliminé(s) : {gameState.lastElimination.eliminatedNames.join(', ')}</p>
                 <p className="text-body text-[13px]">Il reste {gameState.lastElimination.remaining} joueur(s) en course !</p>
               </div>
             )}
-            {hasBuzz && (
+            {!isWaiting && !isGameOver && hasBuzz && (
               <div className="rounded-3xl p-8 text-center bg-linear-to-br from-brand-green/20 to-brand-green/5 border-2 border-brand-green">
                 <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">BUZZÉ</p>
                 <p className="text-5xl font-black text-brand-green [text-shadow:0_0_30px_rgba(57,255,106,0.6)]">{gameState.currentBuzz!.name}</p>
               </div>
             )}
-            {gameState.pause && (
+            {!isWaiting && !isGameOver && gameState.pause && (
               <div className="rounded-3xl p-8 text-center bg-warn-bg border-2 border-warn-border">
                 <p className="text-gold-dark text-lg font-bold">⏸️ Pause — {gameState.pause.joker === 'phone-a-stranger' ? 'Appel à un inconnu en cours' : 'Aide d\'un adversaire en cours'}</p>
                 {gameState.pause.remainingMs !== null && <p className="text-body text-sm mt-2">Temps restant : {Math.ceil(gameState.pause.remainingMs / 1000)}s</p>}
               </div>
             )}
-            {gameState.wrongBuzzers.length > 0 && (
+            {!isWaiting && !isGameOver && gameState.wrongBuzzers.length > 0 && (
               <div className="rounded-2xl p-4 bg-black/30 border border-danger-dark/33">
                 <p className="text-danger text-sm">❌ Déjà écarté(s) : {gameState.wrongBuzzers.map((id) => gameState.players.find((p) => p.id === id)?.name).join(', ')}</p>
               </div>
@@ -1319,15 +1261,43 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
   );
 }
 
+function AnswerReveal({ question, compact = false }: { question: Question; compact?: boolean }) {
+  if (question.type === 'qcm') {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {question.options.map((option, idx) => {
+          const correct = idx === question.correct;
+          return (
+            <div key={idx} className={`p-4 rounded-lg border ${correct ? 'bg-brand-green/25 border-2 border-brand-green' : 'bg-black/30 border-[#64646433]'}`}>
+              <p className={`text-sm ${correct ? 'text-brand-green font-bold' : 'text-body'}`}>
+                <span className="font-bold mr-2">{String.fromCharCode(65 + idx)}.</span>{option}{correct && ' ✓'}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const answer = question.type === 'numeric' ? question.numericAnswer : question.acceptedAnswer;
+  return (
+    <div className={`rounded-xl text-center bg-brand-green/15 border-2 border-brand-green ${compact ? 'p-4' : 'p-6 sm:p-8'}`}>
+      <p className="text-muted text-xs font-bold tracking-[1px] mb-2">BONNE RÉPONSE</p>
+      <p className={`text-brand-green font-black break-words ${compact ? 'text-2xl' : 'text-3xl sm:text-4xl'}`}>{answer ?? 'Réponse non renseignée'}</p>
+    </div>
+  );
+}
+
 // ============ UTILITIES ============
 
-function applyElimination(state: GameState, count: number): { kept: string[]; eliminated: string[] } {
-  const activeData = getActivePlayers(state);
-  if (count >= activeData.length) return { kept: [], eliminated: activeData.map((player) => player.name) };
-  const rankedDesc = [...activeData].sort((a, b) => b.score - a.score);
-  const kept = rankedDesc.slice(count).map((player) => player.id);
-  const eliminated = rankedDesc.slice(0, count).map((player) => player.name);
-  return { kept, eliminated };
+function useCountdown(endsAt: number | null, running: boolean): number {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    if (!endsAt || !running) return;
+    const interval = setInterval(() => setSeconds(Math.max(0, Math.ceil((endsAt - timestamp()) / 1000))), 200);
+    return () => clearInterval(interval);
+  }, [endsAt, running]);
+  return endsAt && running ? seconds : 0;
 }
 
 function phaseLabel(state: GameState): string {
@@ -1340,6 +1310,23 @@ function phaseLabel(state: GameState): string {
     case 'game-over': return 'Terminé';
     default: return '—';
   }
+}
+
+function roundLabel(round: QuestionRound): string {
+  switch (round) {
+    case 'buzzer': return 'Manche buzzer';
+    case 'simultaneous': return 'Manche simultanée';
+    case 'final': return 'Finale';
+  }
+}
+
+function liveStatusLabel(state: GameState): string {
+  if (!state.gameStarted || state.phase === 'lobby') return 'Le jeu n\'a pas commencé';
+  if (state.phase === 'game-over') return 'Partie terminée';
+  if (state.pause || state.phase === 'pause') return `${roundLabel(state.round)} • Pause joker`;
+  if (state.phase === 'review') return `${roundLabel(state.round)} • Réponse à la question ${currentQuestionInRound(state)}`;
+  if (state.phase === 'tiebreak') return `Départage • Question ${currentQuestionInRound(state)}`;
+  return `${roundLabel(state.round)} • Question ${currentQuestionInRound(state)}`;
 }
 
 function currentQuestionInRound(state: GameState): number {

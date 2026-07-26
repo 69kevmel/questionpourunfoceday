@@ -35,6 +35,8 @@ export interface CurrentBuzz {
 export interface SubmittedAnswer {
   value: string;
   submittedAt: number;
+  round: QuestionRound;
+  questionIndex: number;
 }
 
 export interface PauseState {
@@ -58,10 +60,9 @@ export interface AnswerOutcome {
 
 export interface PendingElimination {
   round: 'buzzer' | 'simultaneous';
-  count: number;
-  candidates: string[];
-  eliminateFromCandidates: number;
-  tiebreakScores: Record<string, number>;
+  candidateIds: string[];
+  eliminateCount: number;
+  automaticallyEliminatedIds: string[];
 }
 
 export interface GameState {
@@ -81,6 +82,8 @@ export interface GameState {
   lastElimination: Elimination | null;
   pendingElimination: PendingElimination | null;
   winnerId: string | null;
+  finalScores: Record<string, number>;
+  questionBanks: QuestionBanks | null;
   eliminationPlan: { afterBuzzer: number; afterSimultaneous: number };
   gameStarted: boolean;
 }
@@ -103,6 +106,8 @@ export function createGameState(): GameState {
     lastElimination: null,
     pendingElimination: null,
     winnerId: null,
+    finalScores: {},
+    questionBanks: null,
     eliminationPlan: { afterBuzzer: 0, afterSimultaneous: 0 },
     gameStarted: false,
   };
@@ -136,7 +141,18 @@ export function normalizeGameState(raw: unknown): GameState {
     answerOutcomes: state.answerOutcomes && typeof state.answerOutcomes === 'object' ? state.answerOutcomes : {},
     usedJokers: state.usedJokers && typeof state.usedJokers === 'object' ? state.usedJokers : {},
     fiftyFiftyPlayers: Array.isArray(state.fiftyFiftyPlayers) ? state.fiftyFiftyPlayers : [],
+    finalScores: state.finalScores && typeof state.finalScores === 'object' ? state.finalScores : {},
+    pendingElimination: isPendingElimination(state.pendingElimination) ? state.pendingElimination : null,
   };
+}
+
+function isPendingElimination(value: unknown): value is PendingElimination {
+  if (!value || typeof value !== 'object') return false;
+  const pending = value as Partial<PendingElimination>;
+  return (pending.round === 'buzzer' || pending.round === 'simultaneous')
+    && Array.isArray(pending.candidateIds)
+    && Array.isArray(pending.automaticallyEliminatedIds)
+    && Number.isInteger(pending.eliminateCount);
 }
 
 export function questionsForRound(banks: QuestionBanks, round: QuestionRound): Question[] {
@@ -163,8 +179,143 @@ export function calculateEliminations(playerCount: number): { afterBuzzer: numbe
   return { afterBuzzer: Math.ceil(excess / 2), afterSimultaneous: Math.floor(excess / 2) };
 }
 
+export interface EliminationDecision {
+  keptIds: string[];
+  eliminatedIds: string[];
+  tie: { candidateIds: string[]; eliminateCount: number } | null;
+}
+
+export function decideElimination(state: GameState, count: number): EliminationDecision {
+  const active = getActivePlayers(state);
+  if (count <= 0) return { keptIds: active.map((player) => player.id), eliminatedIds: [], tie: null };
+  if (count >= active.length) return { keptIds: [], eliminatedIds: active.map((player) => player.id), tie: null };
+
+  const ranked = [...active].sort((a, b) => a.score - b.score);
+  const threshold = ranked[count - 1].score;
+  const eliminatedIds = ranked.filter((player) => player.score < threshold).map((player) => player.id);
+  const candidateIds = ranked.filter((player) => player.score === threshold).map((player) => player.id);
+  const eliminateCount = count - eliminatedIds.length;
+
+  if (eliminateCount === candidateIds.length) {
+    const allEliminated = [...eliminatedIds, ...candidateIds];
+    return {
+      keptIds: active.filter((player) => !allEliminated.includes(player.id)).map((player) => player.id),
+      eliminatedIds: allEliminated,
+      tie: null,
+    };
+  }
+
+  return {
+    keptIds: active.filter((player) => !eliminatedIds.includes(player.id)).map((player) => player.id),
+    eliminatedIds,
+    tie: { candidateIds, eliminateCount },
+  };
+}
+
+function questionState(state: GameState, updates: Partial<GameState>): GameState {
+  return {
+    ...state,
+    currentBuzz: null,
+    phase: 'question',
+    wrongBuzzers: [],
+    submittedAnswers: {},
+    answerOutcomes: {},
+    timerEndsAt: null,
+    pause: null,
+    fiftyFiftyPlayers: [],
+    ...updates,
+  };
+}
+
+export function advanceGame(state: GameState, banks: QuestionBanks): GameState {
+  if (state.phase !== 'review') return state;
+  const roundQuestions = questionsForRound(banks, state.round);
+  const nextIndex = state.questionIndex + 1;
+  if (nextIndex < roundQuestions.length) return questionState(state, { questionIndex: nextIndex });
+
+  if (state.round === 'final') {
+    const final = resolveFinal(state);
+    if (final.winnerId) return { ...state, activePlayerIds: [final.winnerId], phase: 'game-over', winnerId: final.winnerId, timerEndsAt: null, pause: null };
+    return questionState(state, { activePlayerIds: final.leaderIds, questionIndex: 0 });
+  }
+
+  const plan = state.eliminationPlan.afterBuzzer + state.eliminationPlan.afterSimultaneous > 0
+    ? state.eliminationPlan
+    : calculateEliminations(state.players.length);
+  const count = state.round === 'buzzer' ? plan.afterBuzzer : plan.afterSimultaneous;
+  const decision = decideElimination(state, count);
+  const nextRound: QuestionRound = state.round === 'buzzer' ? 'simultaneous' : 'final';
+
+  if (decision.tie) {
+    return {
+      ...state,
+      activePlayerIds: decision.keptIds,
+      phase: 'tiebreak',
+      currentBuzz: null,
+      timerEndsAt: null,
+      pause: null,
+      pendingElimination: {
+        round: state.round,
+        candidateIds: decision.tie.candidateIds,
+        eliminateCount: decision.tie.eliminateCount,
+        automaticallyEliminatedIds: decision.eliminatedIds,
+      },
+    };
+  }
+
+  const eliminatedNames = state.players.filter((player) => decision.eliminatedIds.includes(player.id)).map((player) => player.name);
+  const finalScores = nextRound === 'final'
+    ? Object.fromEntries(decision.keptIds.map((id) => [id, 0]))
+    : state.finalScores;
+  return questionState(state, {
+    round: nextRound,
+    questionIndex: 0,
+    activePlayerIds: decision.keptIds,
+    finalScores,
+    pendingElimination: null,
+    lastElimination: { round: state.round, eliminatedNames, remaining: decision.keptIds.length },
+  });
+}
+
+export function resolveEliminationTie(state: GameState, selectedIds: string[]): GameState {
+  const pending = state.pendingElimination;
+  if (state.phase !== 'tiebreak' || !pending) return state;
+  const selected = [...new Set(selectedIds)];
+  if (selected.length !== pending.eliminateCount || selected.some((id) => !pending.candidateIds.includes(id))) return state;
+
+  const allEliminatedIds = [...pending.automaticallyEliminatedIds, ...selected];
+  const keptIds = state.activePlayerIds.filter((id) => !selected.includes(id));
+  const nextRound: QuestionRound = pending.round === 'buzzer' ? 'simultaneous' : 'final';
+  const eliminatedNames = state.players.filter((player) => allEliminatedIds.includes(player.id)).map((player) => player.name);
+  const finalScores = nextRound === 'final' ? Object.fromEntries(keptIds.map((id) => [id, 0])) : state.finalScores;
+
+  return questionState(state, {
+    round: nextRound,
+    questionIndex: 0,
+    activePlayerIds: keptIds,
+    finalScores,
+    pendingElimination: null,
+    lastElimination: { round: pending.round, eliminatedNames, remaining: keptIds.length },
+  });
+}
+
+export function resolveFinal(state: GameState): { winnerId: string | null; leaderIds: string[] } {
+  const activeIds = state.activePlayerIds.filter((id) => state.players.some((player) => player.id === id));
+  if (!activeIds.length) return { winnerId: null, leaderIds: [] };
+  const best = Math.max(...activeIds.map((id) => state.finalScores[id] || 0));
+  const leaderIds = activeIds.filter((id) => (state.finalScores[id] || 0) === best);
+  return { winnerId: leaderIds.length === 1 ? leaderIds[0] : null, leaderIds };
+}
+
+export function isValidPlayerName(value: string): boolean {
+  const name = value.trim();
+  return name.length >= 2 && name.length <= 20 && !['.', '#', '$', '[', ']', '/'].some((character) => name.includes(character));
+}
+
 export function normalizeNumericAnswer(value: string): number | null {
-  const parsed = Number(value.trim().replace(',', '.'));
+  const normalized = value.trim().replace(',', '.');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
 

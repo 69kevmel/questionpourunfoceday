@@ -21,7 +21,7 @@ export const defaultQuestionBanks: QuestionBanks = {
     { id: 103, round: 'simultaneous', type: 'numeric', question: 'Combien de minutes dure une heure ?', options: [], correct: 0, numericAnswer: 60 },
   ],
   final: [
-    { id: 201, round: 'final', type: 'free-text', question: 'Quel est le satellite naturel de la Terre ?', options: [], correct: 0, acceptedAnswer: 'Lune' },
+    { id: 201, round: 'final', type: 'free-text' as const, question: 'Quel est le satellite naturel de la Terre ?', options: [], correct: 0, acceptedAnswer: 'Lune' },
     qcm(202, 'Quelle couleur obtient-on en mélangeant bleu et jaune ?', ['Violet', 'Vert', 'Orange', 'Rose'], 1, 'buzzer'),
   ].map((question) => ({ ...question, round: 'final' as const })),
 };
