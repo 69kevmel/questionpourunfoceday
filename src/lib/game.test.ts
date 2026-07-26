@@ -37,8 +37,8 @@ function stateWithPlayers(count: number): GameState {
 }
 
 describe('parcours des effectifs', () => {
-  for (let count = 5; count <= 15; count += 1) {
-    it(`conserve les deux meilleurs sur ${count} joueurs`, () => {
+  for (let count = 3; count <= 15; count += 1) {
+    it(`termine une boucle complète avec deux finalistes sur ${count} joueurs`, () => {
       let state = stateWithPlayers(count);
       state = advanceGame(state, banks);
       expect(state.round).toBe('simultaneous');
@@ -48,10 +48,17 @@ describe('parcours des effectifs', () => {
       state = advanceGame(state, banks);
       expect(state.round).toBe('final');
       expect(state.activePlayerIds).toEqual(['p1', 'p2']);
+
+      state = { ...state, phase: 'review', finalScores: { p1: 1, p2: 0 } };
+      state = advanceGame(state, banks);
+      expect(state.phase).toBe('game-over');
+      expect(state.winnerId).toBe('p1');
     });
   }
 
   it.each([
+    [3, 1, 0],
+    [4, 1, 1],
     [8, 3, 3],
     [9, 4, 3],
     [10, 4, 4],
@@ -111,6 +118,21 @@ describe('égalités et finale', () => {
 });
 
 describe('validation des réponses et identités', () => {
+  it('supprime les anciens jokers lors de la normalisation', () => {
+    const normalized = normalizeGameState({
+      ...createGameState(),
+      phase: 'pause',
+      pause: { joker: 'phone-a-stranger', playerName: 'Kevin', remainingMs: 5000 },
+      usedJokers: { p1: ['phone-a-stranger'] },
+      fiftyFiftyPlayers: ['p1'],
+    }) as GameState & Record<string, unknown>;
+
+    expect(normalized.phase).toBe('question');
+    expect(normalized).not.toHaveProperty('pause');
+    expect(normalized).not.toHaveProperty('usedJokers');
+    expect(normalized).not.toHaveProperty('fiftyFiftyPlayers');
+  });
+
   it('rejette une réponse numérique vide', () => {
     expect(computeNumericOutcome(banks.simultaneous[0], '')).toEqual({ correct: false, diff: Infinity });
   });

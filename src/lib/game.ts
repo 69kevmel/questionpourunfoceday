@@ -1,7 +1,6 @@
 export type QuestionType = 'qcm' | 'numeric' | 'free-text';
 export type QuestionRound = 'buzzer' | 'simultaneous' | 'final';
-export type GamePhase = 'lobby' | 'question' | 'review' | 'pause' | 'tiebreak' | 'game-over';
-export type JokerName = 'fifty-fifty' | 'phone-a-stranger' | 'opponent-help';
+export type GamePhase = 'lobby' | 'question' | 'review' | 'tiebreak' | 'game-over';
 
 export interface Question {
   id: number;
@@ -39,13 +38,6 @@ export interface SubmittedAnswer {
   questionIndex: number;
 }
 
-export interface PauseState {
-  joker: 'phone-a-stranger' | 'opponent-help';
-  playerName: string;
-  advisorName?: string;
-  remainingMs: number | null;
-}
-
 export interface Elimination {
   round: 'buzzer' | 'simultaneous';
   eliminatedNames: string[];
@@ -76,9 +68,6 @@ export interface GameState {
   submittedAnswers: Record<string, SubmittedAnswer>;
   answerOutcomes: Record<string, AnswerOutcome>;
   timerEndsAt: number | null;
-  pause: PauseState | null;
-  usedJokers: Record<string, JokerName[]>;
-  fiftyFiftyPlayers: string[];
   lastElimination: Elimination | null;
   pendingElimination: PendingElimination | null;
   winnerId: string | null;
@@ -100,9 +89,6 @@ export function createGameState(): GameState {
     submittedAnswers: {},
     answerOutcomes: {},
     timerEndsAt: null,
-    pause: null,
-    usedJokers: {},
-    fiftyFiftyPlayers: [],
     lastElimination: null,
     pendingElimination: null,
     winnerId: null,
@@ -116,10 +102,19 @@ export function createGameState(): GameState {
 export function normalizeGameState(raw: unknown): GameState {
   const base = createGameState();
   if (!raw || typeof raw !== 'object') return base;
-  const state = raw as Partial<GameState>;
-  const legacyActiveNames = Array.isArray((state as { activePlayers?: unknown }).activePlayers)
-    ? ((state as { activePlayers: string[] }).activePlayers)
+  const legacyState = raw as Omit<Partial<GameState>, 'phase'> & { activePlayers?: unknown; phase?: string; pause?: unknown; usedJokers?: unknown; fiftyFiftyPlayers?: unknown };
+  const legacyActiveNames = Array.isArray(legacyState.activePlayers)
+    ? (legacyState.activePlayers as string[])
     : [];
+  const validPhases: GamePhase[] = ['lobby', 'question', 'review', 'tiebreak', 'game-over'];
+  const phase: GamePhase = legacyState.phase === 'pause'
+    ? 'question'
+    : validPhases.includes(legacyState.phase as GamePhase) ? legacyState.phase as GamePhase : base.phase;
+  const state = { ...legacyState } as Partial<GameState> & Record<string, unknown>;
+  delete state.activePlayers;
+  delete state.pause;
+  delete state.usedJokers;
+  delete state.fiftyFiftyPlayers;
   const players = Array.isArray(state.players)
     ? state.players.map((player, index) => ({
         id: player.id || `legacy-${index}-${player.name}`,
@@ -130,17 +125,15 @@ export function normalizeGameState(raw: unknown): GameState {
   const activePlayerIds = Array.isArray(state.activePlayerIds)
     ? state.activePlayerIds
     : players.filter((player) => legacyActiveNames.includes(player.name)).map((player) => player.id);
-
   return {
     ...base,
     ...state,
+    phase: phase || base.phase,
     players,
     activePlayerIds,
     wrongBuzzers: Array.isArray(state.wrongBuzzers) ? state.wrongBuzzers : [],
     submittedAnswers: state.submittedAnswers && typeof state.submittedAnswers === 'object' ? state.submittedAnswers : {},
     answerOutcomes: state.answerOutcomes && typeof state.answerOutcomes === 'object' ? state.answerOutcomes : {},
-    usedJokers: state.usedJokers && typeof state.usedJokers === 'object' ? state.usedJokers : {},
-    fiftyFiftyPlayers: Array.isArray(state.fiftyFiftyPlayers) ? state.fiftyFiftyPlayers : [],
     finalScores: state.finalScores && typeof state.finalScores === 'object' ? state.finalScores : {},
     pendingElimination: normalizePendingElimination(state.pendingElimination, players),
   };
@@ -238,8 +231,6 @@ function questionState(state: GameState, updates: Partial<GameState>): GameState
     submittedAnswers: {},
     answerOutcomes: {},
     timerEndsAt: null,
-    pause: null,
-    fiftyFiftyPlayers: [],
     ...updates,
   };
 }
@@ -252,7 +243,7 @@ export function advanceGame(state: GameState, banks: QuestionBanks): GameState {
 
   if (state.round === 'final') {
     const final = resolveFinal(state);
-    if (final.winnerId) return { ...state, activePlayerIds: [final.winnerId], phase: 'game-over', winnerId: final.winnerId, timerEndsAt: null, pause: null };
+    if (final.winnerId) return { ...state, activePlayerIds: [final.winnerId], phase: 'game-over', winnerId: final.winnerId, timerEndsAt: null };
     return questionState(state, { activePlayerIds: final.leaderIds, questionIndex: 0 });
   }
 
@@ -270,7 +261,6 @@ export function advanceGame(state: GameState, banks: QuestionBanks): GameState {
       phase: 'tiebreak',
       currentBuzz: null,
       timerEndsAt: null,
-      pause: null,
       pendingElimination: {
         round: state.round,
         candidateIds: decision.tie.candidateIds,

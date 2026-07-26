@@ -23,7 +23,7 @@ import {
 
 const STATE_PATH = 'fonceday-game-state';
 const SOCIAL_LINK = 'https://linktr.ee/kanaeclub?utm_source=linktree_profile_share&ltsid=f022cf4b-fffb-4e58-9fb5-8ee79d86e340';
-const MIN_PLAYERS = 5;
+const MIN_PLAYERS = 3;
 const MAX_PLAYERS = 15;
 let serverTimeOffsetMs = 0;
 
@@ -452,7 +452,7 @@ function SpectatorView({ gameState }: { gameState: GameState }) {
 
 function PlayerView({ gameState, banks, playerName }: { gameState: GameState; banks: QuestionBanks; playerName: string }) {
   const prevBuzzRef = useRef(gameState.currentBuzz);
-  const timerLeft = useCountdown(gameState.timerEndsAt, gameState.phase === 'question' && !gameState.pause);
+  const timerLeft = useCountdown(gameState.timerEndsAt, gameState.phase === 'question');
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [numericInput, setNumericInput] = useState('');
   const [textInput, setTextInput] = useState('');
@@ -474,7 +474,7 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
     const expectedIndex = gameState.questionIndex;
     const submittedAt = timestamp();
     await updateGameState((current) => {
-      if (current.phase !== 'question' || current.pause || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
+      if (current.phase !== 'question' || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
       if (!current.activePlayerIds.includes(playerId) || !current.timerEndsAt || submittedAt > current.timerEndsAt) return current;
       if (current.submittedAnswers[playerId]) return current;
       return {
@@ -493,7 +493,7 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
     const buzzedAt = timestamp();
     const expectedIndex = gameState.questionIndex;
     await updateGameState((current) => {
-      if (current.phase !== 'question' || current.round !== 'buzzer' || current.questionIndex !== expectedIndex || current.pause || current.currentBuzz) return current;
+      if (current.phase !== 'question' || current.round !== 'buzzer' || current.questionIndex !== expectedIndex || current.currentBuzz) return current;
       if (!current.activePlayerIds.includes(playerId) || current.wrongBuzzers.includes(playerId)) return current;
       return { ...current, currentBuzz: { playerId, name: playerName, ts: buzzedAt } };
     });
@@ -507,41 +507,6 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
     void submitAnswer(value);
   }
 
-  async function handleFiftyFifty() {
-    const expectedRound = gameState.round;
-    const expectedIndex = gameState.questionIndex;
-    await updateGameState((current) => {
-      if (current.phase !== 'question' || current.pause || current.round === 'buzzer') return current;
-      if (current.round !== expectedRound || current.questionIndex !== expectedIndex || !current.activePlayerIds.includes(playerId)) return current;
-      const used = current.usedJokers[playerId] || [];
-      if (used.includes('fifty-fifty')) return current;
-      return {
-        ...current,
-        fiftyFiftyPlayers: [...current.fiftyFiftyPlayers.filter((id) => id !== playerId), playerId],
-        usedJokers: { ...current.usedJokers, [playerId]: [...used, 'fifty-fifty'] },
-      };
-    });
-  }
-
-  async function handlePauseJoker(joker: 'phone-a-stranger' | 'opponent-help') {
-    const requestedAt = timestamp();
-    const expectedRound = gameState.round;
-    const expectedIndex = gameState.questionIndex;
-    await updateGameState((current) => {
-      if (current.phase !== 'question' || current.pause || current.round === 'buzzer') return current;
-      if (current.round !== expectedRound || current.questionIndex !== expectedIndex || !current.activePlayerIds.includes(playerId)) return current;
-      const used = current.usedJokers[playerId] || [];
-      if (used.includes(joker)) return current;
-      const remainingMs = current.timerEndsAt ? Math.max(0, current.timerEndsAt - requestedAt) : 0;
-      return {
-        ...current,
-        timerEndsAt: null,
-        pause: { joker, playerName, remainingMs },
-        usedJokers: { ...current.usedJokers, [playerId]: [...used, joker] },
-      };
-    });
-  }
-
   const allPlayers = gameState.players || [];
   const playerScore = allPlayers.find((player) => player.name === playerName)?.score || 0;
   const playerRank = [...allPlayers].sort((a, b) => b.score - a.score).findIndex((player) => player.name === playerName) + 1;
@@ -549,11 +514,7 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
   const someoneElseBuzzed = !!gameState.currentBuzz && gameState.currentBuzz.playerId !== playerId;
   const alreadyWrong = gameState.wrongBuzzers.includes(playerId);
   const active = gameState.activePlayerIds.includes(playerId);
-  const usedJokers = gameState.usedJokers[playerId] || gameState.usedJokers[playerName] || [];
-  const fiftyFiftyUsed = usedJokers.includes('fifty-fifty');
-  const fiftyFiftyHidden = fiftyFiftyUsed && question?.type === 'qcm';
-  const canSubmit = gameState.phase === 'question' && !gameState.pause && timerLeft > 0 && !submitted;
-  const canUseJoker = canSubmit && gameState.round !== 'buzzer';
+  const canSubmit = gameState.phase === 'question' && timerLeft > 0 && !submitted;
 
   const buzzDisabled = !!gameState.currentBuzz || alreadyWrong || gameState.round !== 'buzzer';
   const buzzBg = gameState.currentBuzz ? (iBuzzed ? 'bg-linear-to-br from-gold to-gold-dark' : 'bg-buzzed') : alreadyWrong ? 'bg-buzzed' : 'bg-linear-to-br from-brand-green to-brand-green-dark';
@@ -566,10 +527,11 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
 
   function renderQuestionContent() {
     if (!question) return null;
-    if (gameState.pause) return <div className="p-4 rounded-lg text-center bg-warn-bg border border-warn-border"><p className="text-gold-dark font-bold">⏸️ Pause — {gameState.pause.joker === 'phone-a-stranger' ? 'Appel à un inconnu' : 'Aide d\'un adversaire'} en cours...</p></div>;
-    if (gameState.phase === 'review') return <AnswerReveal question={question} compact />;
+    if (gameState.phase === 'review') return <AnswerReveal question={question} selectedValue={submission?.value} compact />;
     if (gameState.phase === 'tiebreak') return <div className="p-4 rounded-lg text-center bg-gold/10 border border-gold-dark"><p className="text-gold font-bold">Départage en cours avec l'animateur</p></div>;
-    if (gameState.round === 'buzzer') return <div className="p-4 rounded-lg text-center bg-brand-green/8 border border-dashed border-brand-green/33"><p className="text-[13px] font-bold text-muted">Buzz puis réponds oralement sur Discord</p></div>;
+    if (gameState.round === 'buzzer') return question.type === 'qcm'
+      ? <QuestionOptions question={question} />
+      : <div className="p-4 rounded-lg text-center bg-brand-green/8 border border-dashed border-brand-green/33"><p className="text-[13px] font-bold text-muted">Buzz puis réponds oralement sur Discord</p></div>;
     if (!gameState.timerEndsAt) return <div className="p-4 rounded-lg text-center bg-black/30 border border-line"><p className="text-sm font-bold text-muted">En attente du lancement du timer</p></div>;
     if (submitted) return <div className="p-4 rounded-lg text-center bg-brand-green/10 border border-brand-green"><p className="font-bold text-brand-green">Réponse envoyée</p><p className="mt-1 text-sm text-body">{submission.value}</p></div>;
 
@@ -577,15 +539,11 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
       case 'qcm':
         return (
           <div className="flex flex-col gap-2">
-            {question.options.map((option, index) => {
-              const alternative = question.options.findIndex((_, optionIndex) => optionIndex !== question.correct);
-              if (fiftyFiftyHidden && index !== question.correct && index !== alternative) return null;
-              return (
+            {question.options.map((option, index) => (
                 <button key={index} onClick={() => setSelectedOption(index)} className={`px-3 py-2 rounded-lg text-sm border text-left ${selectedOption === index ? 'bg-brand-green/25 border-brand-green text-brand-green font-bold' : 'bg-black/30 border-transparent text-body'}`}>
                   {String.fromCharCode(65 + index)}. {option}
                 </button>
-              );
-            })}
+            ))}
             <button onClick={handleValidate} disabled={!canSubmit || selectedOption === null} className="mt-1 px-4 py-2 rounded-lg bg-brand-green text-dark-ink font-bold disabled:opacity-40">Valider</button>
           </div>
         );
@@ -601,43 +559,18 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
     }
   }
 
-  function renderJokers() {
-    if (gameState.phase !== 'question' || gameState.pause || gameState.round === 'buzzer' || submitted) return null;
-    const isNumericOrQcm = question?.type === 'numeric' || question?.type === 'qcm';
-    return (
-      <div className="flex gap-2 flex-wrap">
-        {question?.type === 'qcm' && !fiftyFiftyUsed && (
-          <button onClick={handleFiftyFifty} disabled={!canUseJoker} className="px-3 py-2 rounded-lg text-sm font-bold bg-warn-bg text-gold-dark border border-warn-border disabled:opacity-40">
-            50/50
-          </button>
-        )}
-        {isNumericOrQcm && !usedJokers.includes('phone-a-stranger') && (
-          <button onClick={() => void handlePauseJoker('phone-a-stranger')} disabled={!canUseJoker} className="px-3 py-2 rounded-lg text-sm font-bold bg-warn-bg text-gold-dark border border-warn-border disabled:opacity-40">
-            Appel
-          </button>
-        )}
-        {isNumericOrQcm && !usedJokers.includes('opponent-help') && (
-          <button onClick={() => void handlePauseJoker('opponent-help')} disabled={!canUseJoker} className="px-3 py-2 rounded-lg text-sm font-bold bg-warn-bg text-gold-dark border border-warn-border disabled:opacity-40">
-            Aide adverse
-          </button>
-        )}
-      </div>
-    );
-  }
-
   return (
     <div className="app-bg min-h-screen w-full flex flex-col items-center justify-center p-6">
       <Glow />
       <div className="relative z-10 flex flex-col items-center gap-4 w-full">
         <div className="text-[13px] text-center text-muted">
           <b className="text-gold">{playerName}</b> • {phaseLabel(gameState)} • {currentQuestionInRound(gameState)}
-          {gameState.phase === 'question' && !gameState.pause && timerLeft > 0 && <span className="ml-2 text-brand-green font-bold">{timerLeft}s</span>}
+          {gameState.phase === 'question' && timerLeft > 0 && <span className="ml-2 text-brand-green font-bold">{timerLeft}s</span>}
         </div>
         {question && (
           <div className="w-full max-w-md rounded-xl p-4 mb-4 bg-panel/70 border border-brand-green/20">
             <p className="text-sm font-bold mb-2 text-center text-gold">{question.question}</p>
             {renderQuestionContent()}
-            <div className="mt-3">{renderJokers()}</div>
           </div>
         )}
         {gameState.phase === 'question' && gameState.round === 'buzzer' && active && (
@@ -652,10 +585,12 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
           {someoneElseBuzzed && `${gameState.currentBuzz!.name} a buzzé`}
           {!gameState.currentBuzz && alreadyWrong && "Tu t'es déjà trompé sur cette question, attends la suivante"}
         </p>
-        <div className="mt-6 w-full max-w-xs text-center p-4 rounded-xl bg-panel/70 border border-brand-green/20">
-          <p className="text-muted text-xs mb-1.5">Ton classement</p>
-          <p className="text-3xl font-black text-gold mb-1">#{playerRank}</p>
-          <p className="text-brand-green text-base font-bold">{playerScore} pts</p>
+        <div className="mt-2 w-full max-w-md p-3 rounded-xl bg-panel/70 border border-brand-green/20">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-muted text-xs font-bold">Classement en direct</p>
+            <p className="text-xs"><span className="text-gold font-bold">#{playerRank}</span> <span className="text-brand-green font-bold">{playerScore} pts</span></p>
+          </div>
+          <CompactScoreboard players={allPlayers} currentPlayerId={playerId} activePlayerIds={gameState.activePlayerIds} />
         </div>
       </div>
     </div>
@@ -674,7 +609,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
   const active = getActivePlayers(gameState);
   const question = getCurrentQuestion(gameState, banks);
   const gameOver = gameState.phase === 'game-over';
-  const timerLeft = useCountdown(gameState.timerEndsAt, gameState.phase === 'question' && !gameState.pause);
+  const timerLeft = useCountdown(gameState.timerEndsAt, gameState.phase === 'question');
 
   if (!gameState.gameStarted) return <HostLobbyView gameState={gameState} banks={banks} saveGameState={saveGameState} onManageQuestions={onManageQuestions} onStartTest={onStartTest} onPreviewLive={onPreviewLive} />;
 
@@ -690,6 +625,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
       return {
         ...current,
         players: current.players.map((player) => player.id === buzz.playerId ? { ...player, score: player.score + 1 } : player),
+        answerOutcomes: { [buzz.playerId]: { value: 'Réponse orale', correct: true, points: 1 } },
         currentBuzz: null,
         phase: 'review',
         wrongBuzzers: [],
@@ -716,7 +652,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
     const expectedRound = gameState.round;
     const expectedIndex = gameState.questionIndex;
     await updateGameState((current) => {
-      if (current.phase !== 'question' || current.pause || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
+      if (current.phase !== 'question' || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
       return { ...current, phase: 'review', currentBuzz: null, timerEndsAt: null };
     });
   }
@@ -775,17 +711,8 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
     const expectedRound = gameState.round;
     const expectedIndex = gameState.questionIndex;
     await updateGameState((current) => {
-      if (current.phase !== 'question' || current.pause || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
+      if (current.phase !== 'question' || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
       return advanceGame({ ...current, phase: 'review' }, banks);
-    });
-  }
-
-  async function handleCancelPause() {
-    const resumedAt = timestamp();
-    await updateGameState((current) => {
-      if (!current.pause) return current;
-      const remainingMs = current.pause.remainingMs || 0;
-      return { ...current, pause: null, timerEndsAt: remainingMs > 0 ? resumedAt + remainingMs : null };
     });
   }
 
@@ -891,8 +818,6 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
               <p className="text-muted text-sm mb-3 font-bold">📚 DÉBRIEFING</p>
               <p className="text-gold text-sm mb-3">La bonne réponse est en évidence ci-dessus. Débattez ! 💬</p>
             </>
-          ) : gameState.pause ? (
-            <button onClick={handleCancelPause} className="w-full py-4 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">▶️ Continuer ({Math.ceil((gameState.pause.remainingMs || 0) / 1000)}s)</button>
           ) : gameState.currentBuzz ? (
             <>
               <p className="text-muted text-sm mb-2">Buzzé</p>
@@ -948,7 +873,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
               )}
               {question?.type === 'free-text' && gameState.timerEndsAt && <button onClick={handleResolveAnswers} className="w-full mb-3 py-2 rounded-lg bg-brand-green text-dark-ink font-bold">Résoudre les réponses</button>}
               <div className="flex gap-3">
-                <button onClick={handleRevealOptions} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-warn-bg text-gold-dark border border-warn-border">Montrer la réponse 👀</button>
+                {gameState.round === 'buzzer' && <button onClick={handleRevealOptions} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-warn-bg text-gold-dark border border-warn-border">Montrer la réponse 👀</button>}
                 <button onClick={handleSkipQuestion} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-[#64646433] text-muted border border-line">Passer ⏭️</button>
                 {gameState.round !== 'buzzer' && !gameState.timerEndsAt && (
                   <button onClick={handleStartTimer} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">▶️ Commencer le timer</button>
@@ -1106,188 +1031,182 @@ function TestModeView({ onExit }: { onExit: () => void }) {
 
 function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameState: GameState; banks: QuestionBanks; onExit?: () => void; eliminatedPlayerName?: string }) {
   const allPlayers = gameState.players || [];
-  const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
+  const sorted = [...allPlayers].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
   const question = getCurrentQuestion(gameState, banks);
-  const questionNum = currentQuestionInRound(gameState);
-  const hasBuzz = !!gameState.currentBuzz;
-  const myScore = eliminatedPlayerName ? allPlayers.find((player) => player.name === eliminatedPlayerName)?.score || 0 : 0;
-  const myRank = eliminatedPlayerName ? sorted.findIndex((player) => player.name === eliminatedPlayerName) + 1 : 0;
   const active = getActivePlayers(gameState);
   const isWaiting = !gameState.gameStarted || gameState.phase === 'lobby';
   const isGameOver = gameState.phase === 'game-over';
   const winner = allPlayers.find((player) => player.id === gameState.winnerId);
-  const viewerEliminated = eliminatedPlayerName ? !gameState.activePlayerIds.includes(getPlayerId(gameState, eliminatedPlayerName)) : false;
-  const timerDisplay = useCountdown(gameState.timerEndsAt, gameState.phase === 'question' && !gameState.pause);
+  const viewerId = eliminatedPlayerName ? getPlayerId(gameState, eliminatedPlayerName) : undefined;
+  const viewerEliminated = viewerId ? !gameState.activePlayerIds.includes(viewerId) : false;
+  const timerDisplay = useCountdown(gameState.timerEndsAt, gameState.phase === 'question');
 
   return (
-    <div className="app-bg min-h-screen w-full p-4 sm:p-8">
+    <div className="live-screen app-bg w-full">
       <Glow />
-      <div className="relative z-10 max-w-6xl mx-auto">
-        <div className="text-center mb-12">
-          <div className="inline-block px-4 py-2 rounded-full mb-3 bg-brand-green/15 border border-brand-green">
-            <p className="text-brand-green text-xs font-bold tracking-[1px]">🔴 LIVE</p>
+      <div className="live-layout relative z-10 mx-auto max-w-[1600px]">
+        <header className="live-header">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="live-dot" aria-hidden="true" />
+              <p className="text-brand-green text-[10px] font-bold tracking-[1px]">LIVE</p>
+            </div>
+            <h1 className="text-gold font-heading font-bold truncate">Questions pour un Fonceday</h1>
           </div>
-          <h1 className="text-gold text-4xl sm:text-5xl font-bold font-heading mb-2">Questions pour un Fonceday</h1>
-          <p className="text-muted text-sm">{liveStatusLabel(gameState)}</p>
-        </div>
-        {eliminatedPlayerName && viewerEliminated && !isGameOver && (
-          <div className="rounded-2xl p-5 mb-8 text-center bg-danger-strong/12 border-2 border-danger-dark">
-            <p className="text-danger font-bold text-lg mb-1">❌ {eliminatedPlayerName}, tu as été éliminé de la partie</p>
-            <p className="text-body text-sm">Tu peux continuer à suivre la partie en direct ci-dessous ! 📊</p>
+          <div className="text-right shrink-0">
+            <p className="text-ink text-xs sm:text-sm font-bold">{liveStatusLabel(gameState)}</p>
+            <p className="text-muted text-[10px] sm:text-xs">{active.length} / {allPlayers.length} joueurs en course</p>
           </div>
-        )}
-        <div className="mb-8 grid grid-cols-3 gap-2 sm:gap-4" aria-label="Progression de la partie">
+          {onExit && <button onClick={onExit} title="Quitter le live" aria-label="Quitter le live" className="live-exit">×</button>}
+        </header>
+
+        <div className="live-progress" aria-label="Progression de la partie">
           {(['buzzer', 'simultaneous', 'final'] as QuestionRound[]).map((round, index) => {
-            const rounds: QuestionRound[] = ['buzzer', 'simultaneous', 'final'];
-            const currentRound = rounds.indexOf(gameState.round);
+            const currentRound = (['buzzer', 'simultaneous', 'final'] as QuestionRound[]).indexOf(gameState.round);
             const done = gameState.gameStarted && (index < currentRound || isGameOver);
             const current = gameState.gameStarted && !isGameOver && index === currentRound;
-            return (
-              <div key={round} className={`min-w-0 border-t-4 pt-3 ${current ? 'border-brand-green' : done ? 'border-gold' : 'border-line'}`}>
-                <p className={`text-[10px] sm:text-xs font-bold ${current ? 'text-brand-green' : done ? 'text-gold' : 'text-faint'}`}>{done ? 'TERMINÉE' : current ? 'EN COURS' : 'À VENIR'}</p>
-                <p className="mt-1 text-xs sm:text-base font-bold text-ink break-words">{roundLabel(round)}</p>
-              </div>
-            );
+            return <div key={round} className={`live-progress-step ${current ? 'is-current' : done ? 'is-done' : ''}`}><span>{roundLabel(round)}</span></div>;
           })}
         </div>
-        {isWaiting && (
-          <div className="mb-8 rounded-3xl p-8 sm:p-12 text-center bg-panel/90 border-2 border-brand-green/27">
-            <p className="text-brand-green text-xs font-bold tracking-[1px] mb-3">EN ATTENTE</p>
-            <h2 className="text-gold text-3xl sm:text-4xl font-heading font-bold mb-3">Le jeu n'a pas encore commencé</h2>
-            <p className="text-body">Les joueurs peuvent rejoindre la partie. Le direct se mettra à jour automatiquement au lancement.</p>
-            <p className="mt-6 text-brand-green font-bold">{allPlayers.length} joueur{allPlayers.length > 1 ? 's' : ''} inscrit{allPlayers.length > 1 ? 's' : ''}</p>
-          </div>
-        )}
-        {isGameOver && (
-          <div className="mb-8 rounded-3xl p-8 sm:p-12 text-center bg-panel/90 border-2 border-gold">
-            <p className="text-gold text-xs font-bold tracking-[1px] mb-3">PARTIE TERMINÉE</p>
-            <h2 className="text-ink text-3xl sm:text-5xl font-heading font-bold mb-3">{winner ? `${winner.name} remporte la partie` : 'La partie est terminée'}</h2>
-            {winner && <p className="text-brand-green text-2xl font-black">{gameState.finalScores[winner.id] ?? winner.score} pts en finale</p>}
-          </div>
-        )}
-        {gameState.phase === 'tiebreak' && gameState.pendingElimination && (
-          <div className="mb-8 rounded-3xl p-8 text-center bg-warn-bg border-2 border-warn-border">
-            <p className="text-gold text-xs font-bold tracking-[1px] mb-2">DÉPARTAGE</p>
-            <p className="text-ink text-2xl font-heading font-bold">Égalité au seuil d'élimination</p>
-            <p className="text-body mt-2">L'animateur départage {gameState.pendingElimination.candidateIds.map((id) => gameState.players.find((player) => player.id === id)?.name).filter(Boolean).join(', ')}.</p>
-          </div>
-        )}
-        {gameState.phase === 'tiebreak' && !gameState.pendingElimination && (
-          <div className="mb-8 rounded-3xl p-8 text-center bg-warn-bg border-2 border-warn-border">
-            <p className="text-gold text-xs font-bold tracking-[1px] mb-2">DÉPARTAGE</p>
-            <p className="text-ink text-2xl font-heading font-bold">L'animateur prépare le départage</p>
-          </div>
-        )}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 flex flex-col gap-6">
-            {!isWaiting && !isGameOver && gameState.phase !== 'tiebreak' && question && (
-              <div className="rounded-3xl p-8 bg-panel/90 border-2 border-brand-green/27">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                  <p className="text-muted text-xs font-bold tracking-[1px]">{gameState.phase === 'review' ? '📚 RÉPONSE' : 'QUESTION EN COURS'}</p>
-                  <p className="text-brand-green text-xs font-bold">Question {questionNum}</p>
+
+        <main className="live-main">
+          <section className="live-stage live-card">
+            {isWaiting ? (
+              <div className="live-center-state">
+                <p className="text-brand-green text-xs font-bold tracking-[1px]">EN ATTENTE</p>
+                <h2 className="text-gold font-heading font-bold">Le jeu va commencer</h2>
+                <p className="text-body">{allPlayers.length} joueur{allPlayers.length > 1 ? 's' : ''} inscrit{allPlayers.length > 1 ? 's' : ''}</p>
+              </div>
+            ) : isGameOver ? (
+              <div className="live-center-state">
+                <p className="text-gold text-xs font-bold tracking-[1px]">PARTIE TERMINÉE</p>
+                <h2 className="text-ink font-heading font-bold">{winner ? `${winner.name} remporte la partie` : 'La partie est terminée'}</h2>
+                {winner && <p className="text-brand-green font-black">{gameState.finalScores[winner.id] ?? winner.score} pts en finale</p>}
+              </div>
+            ) : gameState.phase === 'tiebreak' ? (
+              <div className="live-center-state">
+                <p className="text-gold text-xs font-bold tracking-[1px]">DÉPARTAGE</p>
+                <h2 className="text-ink font-heading font-bold">Égalité au seuil d'élimination</h2>
+                <p className="text-body">{gameState.pendingElimination ? gameState.pendingElimination.candidateIds.map((id) => gameState.players.find((player) => player.id === id)?.name).filter(Boolean).join(', ') : "L'animateur prépare le départage"}</p>
+              </div>
+            ) : question ? (
+              <>
+                <div className="live-question-head">
+                  <p className="text-muted text-[10px] sm:text-xs font-bold tracking-[1px]">{gameState.phase === 'review' ? 'RÉSULTAT' : 'QUESTION EN COURS'}</p>
+                  <p className="text-brand-green text-xs font-bold">Question {currentQuestionInRound(gameState)}{timerDisplay > 0 ? ` · ${timerDisplay}s` : ''}</p>
                 </div>
-                <p className="text-ink text-[28px] font-bold mb-5 leading-[1.4]">{question.question}</p>
+                <p className="live-question text-ink font-bold">{question.question}</p>
                 {gameState.phase === 'review' ? (
-                  <AnswerReveal question={question} />
-                ) : gameState.phase === 'question' && question.type === 'qcm' ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {question.options.map((option, idx) => (
-                      <div key={idx} className="p-5 rounded-xl bg-black/30 border border-[#64646433]"><p className="text-body text-base"><span className="text-brand-green font-bold mr-2">{String.fromCharCode(65 + idx)}.</span>{option}</p></div>
-                    ))}
+                  <div className="live-review">
+                    <AnswerReveal question={question} compact />
+                    <LiveAnswerResults gameState={gameState} question={question} />
                   </div>
-                ) : gameState.phase === 'question' && question.type === 'numeric' ? (
-                  <div className="p-8 rounded-xl text-center bg-brand-green/10 border-2 border-dashed border-brand-green">
-                    <p className="text-muted text-lg font-bold">⏱️ Chiffre le plus proche</p>
-                    {timerDisplay > 0 && <p className="text-brand-green text-3xl font-black mt-2">{timerDisplay}s</p>}
+                ) : question.type === 'qcm' ? (
+                  <QuestionOptions question={question} live />
+                ) : (
+                  <div className="live-answer-mode">
+                    <p className="text-brand-green font-black">{question.type === 'numeric' ? 'Chiffre le plus proche' : 'Réponse libre'}</p>
                   </div>
-                ) : gameState.phase === 'question' ? (
-                  <div className="p-8 rounded-xl text-center bg-brand-green/10 border-2 border-dashed border-brand-green"><p className="text-muted text-lg font-bold">❓ Réponse libre</p></div>
-                ) : null}
-              </div>
-            )}
-            {!isWaiting && gameState.lastElimination && (
-              <div className="rounded-2xl p-5 bg-danger-strong/15 border-2 border-danger-dark">
-                <p className="text-danger font-bold text-base mb-1">🚫 Éliminé(s) : {gameState.lastElimination.eliminatedNames.join(', ')}</p>
-                <p className="text-body text-[13px]">Il reste {gameState.lastElimination.remaining} joueur(s) en course !</p>
-              </div>
-            )}
-            {!isWaiting && !isGameOver && hasBuzz && (
-              <div className="rounded-3xl p-8 text-center bg-linear-to-br from-brand-green/20 to-brand-green/5 border-2 border-brand-green">
-                <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">BUZZÉ</p>
-                <p className="text-5xl font-black text-brand-green [text-shadow:0_0_30px_rgba(57,255,106,0.6)]">{gameState.currentBuzz!.name}</p>
-              </div>
-            )}
-            {!isWaiting && !isGameOver && gameState.pause && (
-              <div className="rounded-3xl p-8 text-center bg-warn-bg border-2 border-warn-border">
-                <p className="text-gold-dark text-lg font-bold">⏸️ Pause — {gameState.pause.joker === 'phone-a-stranger' ? 'Appel à un inconnu en cours' : 'Aide d\'un adversaire en cours'}</p>
-                {gameState.pause.remainingMs !== null && <p className="text-body text-sm mt-2">Temps restant : {Math.ceil(gameState.pause.remainingMs / 1000)}s</p>}
-              </div>
-            )}
-            {!isWaiting && !isGameOver && gameState.wrongBuzzers.length > 0 && (
-              <div className="rounded-2xl p-4 bg-black/30 border border-danger-dark/33">
-                <p className="text-danger text-sm">❌ Déjà écarté(s) : {gameState.wrongBuzzers.map((id) => gameState.players.find((p) => p.id === id)?.name).join(', ')}</p>
-              </div>
-            )}
-          </div>
-          <div className="flex flex-col gap-6">
-            {eliminatedPlayerName && (
-              <div className="rounded-3xl p-6 text-center bg-panel/90 border-2 border-danger-dark/33">
-                <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">TES STATS</p>
-                <p className="text-4xl font-black text-gold mb-1">#{myRank}</p>
-                <p className="text-brand-green text-lg font-bold">{myScore} pts</p>
-              </div>
-            )}
-            <div className="rounded-3xl p-6 bg-panel/90 border-2 border-brand-green/27">
-              <p className="text-muted text-xs font-bold mb-3 tracking-[1px]">CLASSEMENT</p>
-              {sorted.length === 0 ? <p className="text-faint text-center py-5">Aucun joueur</p> : (
-                <div className="flex flex-col gap-3">
-                  {sorted.slice(0, 5).map((player, idx) => {
-                    const eliminated = isPlayerEliminated(gameState, player.name);
-                    return (
-                      <div key={player.id} className={`flex items-center gap-3 p-4 rounded-xl border ${idx === 0 ? 'bg-gold/10 border-gold/33' : 'bg-black/30 border-[#64646433]'} ${eliminated ? 'opacity-45' : ''}`}>
-                        <span className={`font-bold min-w-[30px] ${idx === 0 ? 'text-gold text-xl' : 'text-brand-green text-base'}`}>{idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `${idx + 1}`}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-ink font-semibold text-[15px] break-words ${eliminated ? 'line-through' : ''}`}>{player.name}{eliminated && ' ❌'}</p>
-                        </div>
-                        <span className="text-brand-green font-bold text-lg min-w-[50px] text-right">{player.score}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                )}
+                {gameState.currentBuzz && <div className="live-alert is-buzz"><span>BUZZ</span><b>{gameState.currentBuzz.name}</b></div>}
+                {gameState.wrongBuzzers.length > 0 && <div className="live-alert is-wrong">Déjà écartés : {gameState.wrongBuzzers.map((id) => gameState.players.find((player) => player.id === id)?.name).filter(Boolean).join(', ')}</div>}
+                {gameState.lastElimination && <div className="live-alert is-elimination">Éliminés : {gameState.lastElimination.eliminatedNames.join(', ')}</div>}
+              </>
+            ) : null}
+          </section>
+
+          <aside className="live-ranking live-card">
+            <div className="live-ranking-head">
+              <p className="text-muted text-[10px] sm:text-xs font-bold tracking-[1px]">CLASSEMENT EN DIRECT</p>
+              {eliminatedPlayerName && viewerEliminated && <span className="text-danger text-[10px] font-bold">ÉLIMINÉ</span>}
             </div>
-            <div className="rounded-3xl p-6 bg-panel/80 border border-brand-green/13">
-              <p className="text-muted text-xs font-bold mb-2 tracking-[1px]">STATS</p>
-              <div className="space-y-4">
-                <div><p className="text-muted text-xs mb-1">Joueurs en course</p><p className="text-brand-green text-2xl font-bold">{active.length} / {allPlayers.length}</p></div>
-                <div><p className="text-muted text-xs mb-1">Manche</p><p className="text-gold text-2xl font-bold">{phaseLabel(gameState)}</p></div>
-              </div>
+            <div className="live-score-grid">
+              {sorted.map((player, index) => {
+                const eliminated = !gameState.activePlayerIds.includes(player.id) && gameState.gameStarted;
+                return (
+                  <div key={player.id} className={`live-score-row ${index === 0 ? 'is-first' : ''} ${eliminated ? 'is-eliminated' : ''} ${player.id === viewerId ? 'is-viewer' : ''}`}>
+                    <span className="live-rank">{index + 1}</span>
+                    <span className="live-player-name">{player.name}</span>
+                    <b>{player.score}</b>
+                  </div>
+                );
+              })}
             </div>
-          </div>
-        </div>
-        <div className="mt-12 text-center">
-          <p className="text-gold text-lg sm:text-xl font-semibold font-heading italic">Ça se passe sur le Discord de Kanaé ! 🎮</p>
-        </div>
-        {onExit && (
-          <div className="mt-6 text-center">
-            <button onClick={onExit} className="px-6 py-2 rounded-lg text-sm font-bold transition-opacity hover:opacity-70 bg-[#64646433] text-muted border border-line">Quitter le live</button>
-          </div>
-        )}
+          </aside>
+        </main>
       </div>
     </div>
   );
 }
 
-function AnswerReveal({ question, compact = false }: { question: Question; compact?: boolean }) {
+function QuestionOptions({ question, live = false }: { question: Question; live?: boolean }) {
+  return (
+    <div className={live ? 'live-options' : 'grid grid-cols-1 sm:grid-cols-2 gap-2'}>
+      {question.options.map((option, index) => (
+        <div key={index} className={live ? 'live-option' : 'px-3 py-2 rounded-lg bg-black/30 border border-line'}>
+          <span className="text-brand-green font-bold mr-2">{String.fromCharCode(65 + index)}.</span>
+          <span className="text-body">{option}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CompactScoreboard({ players, currentPlayerId, activePlayerIds }: { players: GameState['players']; currentPlayerId?: string; activePlayerIds: string[] }) {
+  const sorted = [...players].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  return (
+    <div className="grid grid-cols-3 gap-1.5">
+      {sorted.map((player, index) => {
+        const eliminated = !activePlayerIds.includes(player.id);
+        return (
+          <div key={player.id} className={`min-w-0 px-2 py-1.5 rounded-md border flex items-center gap-1 ${player.id === currentPlayerId ? 'border-gold bg-gold/10' : 'border-line/50 bg-black/25'} ${eliminated ? 'opacity-45' : ''}`}>
+            <span className="text-muted text-[10px] shrink-0">{index + 1}</span>
+            <span className="text-body text-[11px] font-bold truncate flex-1">{player.name}</span>
+            <span className="text-brand-green text-[11px] font-black shrink-0">{player.score}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatAnswer(question: Question, value: string): string {
+  if (!value) return 'Pas de réponse';
+  if (question.type !== 'qcm') return value;
+  const index = value.toUpperCase().charCodeAt(0) - 65;
+  return index >= 0 && index < question.options.length ? `${value.toUpperCase()}. ${question.options[index]}` : value;
+}
+
+function LiveAnswerResults({ gameState, question }: { gameState: GameState; question: Question }) {
+  const outcomes = getActivePlayers(gameState)
+    .map((player) => ({ player, outcome: gameState.answerOutcomes[player.id] || gameState.answerOutcomes[player.name] }))
+    .filter((entry) => entry.outcome);
+  if (!outcomes.length) return null;
+  return (
+    <div className="live-results">
+      {outcomes.map(({ player, outcome }) => (
+        <div key={player.id} className={`live-result-row ${outcome.points > 0 ? 'is-correct' : 'is-wrong'}`}>
+          <span>{player.name}</span>
+          <span className="live-result-answer">{formatAnswer(question, outcome.value)}</span>
+          <b>{outcome.points > 0 ? `+${outcome.points}` : '0'}</b>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AnswerReveal({ question, selectedValue, compact = false }: { question: Question; selectedValue?: string; compact?: boolean }) {
   if (question.type === 'qcm') {
+    const selectedIndex = selectedValue ? selectedValue.toUpperCase().charCodeAt(0) - 65 : -1;
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${compact ? 'gap-2' : 'gap-3'}`}>
         {question.options.map((option, idx) => {
           const correct = idx === question.correct;
+          const selected = idx === selectedIndex;
           return (
-            <div key={idx} className={`p-4 rounded-lg border ${correct ? 'bg-brand-green/25 border-2 border-brand-green' : 'bg-black/30 border-[#64646433]'}`}>
-              <p className={`text-sm ${correct ? 'text-brand-green font-bold' : 'text-body'}`}>
-                <span className="font-bold mr-2">{String.fromCharCode(65 + idx)}.</span>{option}{correct && ' ✓'}
+            <div key={idx} className={`${compact ? 'p-2' : 'p-4'} rounded-lg border ${correct ? 'bg-brand-green/25 border-brand-green' : selected ? 'bg-danger-strong/15 border-danger' : 'bg-black/30 border-[#64646433]'}`}>
+              <p className={`${compact ? 'text-xs' : 'text-sm'} ${correct ? 'text-brand-green font-bold' : selected ? 'text-danger font-bold' : 'text-body'}`}>
+                <span className="font-bold mr-2">{String.fromCharCode(65 + idx)}.</span>{option}{correct && ' ✓'}{selected && <span className="ml-2 text-[10px] uppercase">Ton choix</span>}
               </p>
             </div>
           );
@@ -1298,9 +1217,10 @@ function AnswerReveal({ question, compact = false }: { question: Question; compa
 
   const answer = question.type === 'numeric' ? question.numericAnswer : question.acceptedAnswer;
   return (
-    <div className={`rounded-xl text-center bg-brand-green/15 border-2 border-brand-green ${compact ? 'p-4' : 'p-6 sm:p-8'}`}>
-      <p className="text-muted text-xs font-bold tracking-[1px] mb-2">BONNE RÉPONSE</p>
-      <p className={`text-brand-green font-black break-words ${compact ? 'text-2xl' : 'text-3xl sm:text-4xl'}`}>{answer ?? 'Réponse non renseignée'}</p>
+    <div className={`rounded-xl text-center bg-brand-green/15 border border-brand-green ${compact ? 'p-2' : 'p-6 sm:p-8'}`}>
+      <p className="text-muted text-[10px] font-bold tracking-[1px] mb-1">BONNE RÉPONSE</p>
+      <p className={`text-brand-green font-black break-words ${compact ? 'text-lg' : 'text-3xl sm:text-4xl'}`}>{answer ?? 'Réponse non renseignée'}</p>
+      {selectedValue && <p className="text-body text-xs mt-1">Ta réponse : <b>{selectedValue}</b></p>}
     </div>
   );
 }
@@ -1322,7 +1242,6 @@ function phaseLabel(state: GameState): string {
     case 'lobby': return 'Lobby';
     case 'question': return state.round === 'buzzer' ? 'Manche buzzer' : state.round === 'simultaneous' ? 'Manche simultanee' : 'Finale';
     case 'review': return 'Révision';
-    case 'pause': return 'Pause joker';
     case 'tiebreak': return 'Départage';
     case 'game-over': return 'Terminé';
     default: return '—';
@@ -1340,7 +1259,6 @@ function roundLabel(round: QuestionRound): string {
 function liveStatusLabel(state: GameState): string {
   if (!state.gameStarted || state.phase === 'lobby') return 'Le jeu n\'a pas commencé';
   if (state.phase === 'game-over') return 'Partie terminée';
-  if (state.pause || state.phase === 'pause') return `${roundLabel(state.round)} • Pause joker`;
   if (state.phase === 'review') return `${roundLabel(state.round)} • Réponse à la question ${currentQuestionInRound(state)}`;
   if (state.phase === 'tiebreak') return `Départage • Question ${currentQuestionInRound(state)}`;
   return `${roundLabel(state.round)} • Question ${currentQuestionInRound(state)}`;
