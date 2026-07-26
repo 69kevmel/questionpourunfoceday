@@ -77,14 +77,23 @@
     gap: 10px;
   }
 
+  .live-topbar {
+    display: grid;
+    grid-template-columns: clamp(280px, 23vw, 350px) minmax(0, 1fr) clamp(220px, 19vw, 290px);
+    align-items: stretch;
+    gap: 14px;
+  }
+
   .live-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto auto;
-    align-items: center;
+    align-content: center;
+    align-items: end;
     gap: 16px;
-    min-height: 56px;
+    min-height: 0;
+    border-top: 1px solid rgba(232, 196, 104, 0.28);
     border-bottom: 1px solid rgba(232, 196, 104, 0.28);
-    padding: 0 2px 10px;
+    padding: 14px 4px;
   }
 
   .live-header h1 {
@@ -108,8 +117,9 @@
   }
 
   .live-status {
-    border-right: 1px solid rgba(74, 99, 83, 0.7);
-    padding-right: 16px;
+    border-left: 1px solid rgba(74, 99, 83, 0.7);
+    padding-left: 16px;
+    text-align: left;
   }
 
   .live-dot {
@@ -131,6 +141,10 @@
     background: rgba(0, 0, 0, 0.3);
     font-size: 22px;
     line-height: 1;
+  }
+
+  .live-overlay-safe-zone {
+    min-width: 0;
   }
 
   .live-progress {
@@ -356,17 +370,10 @@
     padding: 12px;
   }
 
-  .live-sidebar {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    gap: 12px;
-  }
-
   .live-camera-slot {
     position: relative;
     width: 100%;
-    aspect-ratio: 1;
+    aspect-ratio: 16 / 9;
     flex: 0 0 auto;
     border: 2px solid rgba(232, 196, 104, 0.72);
     border-radius: 6px;
@@ -460,9 +467,15 @@
       gap: 6px;
     }
 
+    .live-topbar {
+      display: block;
+    }
+
     .live-header {
+      grid-template-columns: minmax(0, 1fr) auto auto;
       min-height: 38px;
       gap: 8px;
+      border-top: 0;
       padding-bottom: 6px;
     }
 
@@ -476,11 +489,8 @@
       gap: 6px;
     }
 
-    .live-sidebar {
-      display: contents;
-    }
-
-    .live-camera-slot {
+    .live-camera-slot,
+    .live-overlay-safe-zone {
       display: none;
     }
 

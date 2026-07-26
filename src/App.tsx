@@ -1061,20 +1061,24 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
     <div className="live-screen app-bg w-full">
       <Glow />
       <div className="live-layout relative z-10 mx-auto max-w-[1600px]">
-        <header className="live-header">
-          <div className="live-brand min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="live-dot" aria-hidden="true" />
-              <p className="text-brand-green text-[10px] font-bold tracking-[1px]">EN DIRECT</p>
+        <div className="live-topbar">
+          <div className="live-camera-slot" aria-hidden="true" />
+          <header className="live-header">
+            <div className="live-brand min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="live-dot" aria-hidden="true" />
+                <p className="text-brand-green text-[10px] font-bold tracking-[1px]">EN DIRECT</p>
+              </div>
+              <h1 className="text-gold font-heading font-bold truncate">Questions pour un Fonceday</h1>
             </div>
-            <h1 className="text-gold font-heading font-bold truncate">Questions pour un Fonceday</h1>
-          </div>
-          <div className="live-status text-right shrink-0">
-            <p className="text-ink text-xs sm:text-sm font-bold">{liveStatusLabel(gameState)}</p>
-            <p className="text-muted text-[10px] sm:text-xs">{active.length} / {allPlayers.length} joueurs en course</p>
-          </div>
-          {onExit && <button onClick={onExit} title="Quitter le live" aria-label="Quitter le live" className="live-exit">×</button>}
-        </header>
+            <div className="live-status shrink-0">
+              <p className="text-ink text-xs sm:text-sm font-bold">{liveStatusLabel(gameState)}</p>
+              <p className="text-muted text-[10px] sm:text-xs">{active.length} / {allPlayers.length} joueurs en course</p>
+            </div>
+            {onExit && <button onClick={onExit} title="Quitter le live" aria-label="Quitter le live" className="live-exit">×</button>}
+          </header>
+          <div className="live-overlay-safe-zone" aria-hidden="true" />
+        </div>
 
         <div className="live-progress" aria-label="Progression de la partie">
           {(['buzzer', 'simultaneous', 'final'] as QuestionRound[]).map((round, index) => {
@@ -1131,32 +1135,29 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
             ) : null}
           </section>
 
-          <aside className="live-sidebar">
-            <div className="live-camera-slot" aria-hidden="true" />
-            <section className="live-ranking live-card">
-              <div className="live-ranking-head">
-                <p className="text-muted text-[10px] sm:text-xs font-bold tracking-[1px]">CLASSEMENT EN DIRECT</p>
-                {eliminatedPlayerName && viewerEliminated && <span className="text-danger text-[10px] font-bold">ÉLIMINÉ</span>}
-              </div>
-              <div
-                className="live-score-grid"
-                style={{
-                  '--live-score-rows': Math.max(sorted.length, 8),
-                  '--live-mobile-score-rows': Math.max(Math.ceil(sorted.length / 3), 3),
-                } as CSSProperties}
-              >
-                {sorted.map((player, index) => {
-                  const eliminated = !gameState.activePlayerIds.includes(player.id) && gameState.gameStarted;
-                  return (
-                    <div key={player.id} className={`live-score-row ${index === 0 ? 'is-first' : ''} ${eliminated ? 'is-eliminated' : ''} ${player.id === viewerId ? 'is-viewer' : ''}`}>
-                      <span className="live-rank">{index + 1}</span>
-                      <span className="live-player-name">{player.name}</span>
-                      <b>{player.score}</b>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
+          <aside className="live-ranking live-card">
+            <div className="live-ranking-head">
+              <p className="text-muted text-[10px] sm:text-xs font-bold tracking-[1px]">CLASSEMENT EN DIRECT</p>
+              {eliminatedPlayerName && viewerEliminated && <span className="text-danger text-[10px] font-bold">ÉLIMINÉ</span>}
+            </div>
+            <div
+              className="live-score-grid"
+              style={{
+                '--live-score-rows': Math.max(sorted.length, 8),
+                '--live-mobile-score-rows': Math.max(Math.ceil(sorted.length / 3), 3),
+              } as CSSProperties}
+            >
+              {sorted.map((player, index) => {
+                const eliminated = !gameState.activePlayerIds.includes(player.id) && gameState.gameStarted;
+                return (
+                  <div key={player.id} className={`live-score-row ${index === 0 ? 'is-first' : ''} ${eliminated ? 'is-eliminated' : ''} ${player.id === viewerId ? 'is-viewer' : ''}`}>
+                    <span className="live-rank">{index + 1}</span>
+                    <span className="live-player-name">{player.name}</span>
+                    <b>{player.score}</b>
+                  </div>
+                );
+              })}
+            </div>
           </aside>
         </main>
       </div>
