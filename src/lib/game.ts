@@ -142,17 +142,34 @@ export function normalizeGameState(raw: unknown): GameState {
     usedJokers: state.usedJokers && typeof state.usedJokers === 'object' ? state.usedJokers : {},
     fiftyFiftyPlayers: Array.isArray(state.fiftyFiftyPlayers) ? state.fiftyFiftyPlayers : [],
     finalScores: state.finalScores && typeof state.finalScores === 'object' ? state.finalScores : {},
-    pendingElimination: isPendingElimination(state.pendingElimination) ? state.pendingElimination : null,
+    pendingElimination: normalizePendingElimination(state.pendingElimination, players),
   };
 }
 
-function isPendingElimination(value: unknown): value is PendingElimination {
-  if (!value || typeof value !== 'object') return false;
-  const pending = value as Partial<PendingElimination>;
-  return (pending.round === 'buzzer' || pending.round === 'simultaneous')
-    && Array.isArray(pending.candidateIds)
-    && Array.isArray(pending.automaticallyEliminatedIds)
-    && Number.isInteger(pending.eliminateCount);
+function normalizePendingElimination(value: unknown, players: Player[]): PendingElimination | null {
+  if (!value || typeof value !== 'object') return null;
+  const pending = value as Partial<PendingElimination> & { candidates?: unknown; eliminateFromCandidates?: unknown };
+  if (pending.round !== 'buzzer' && pending.round !== 'simultaneous') return null;
+
+  const rawCandidates = Array.isArray(pending.candidateIds)
+    ? pending.candidateIds
+    : Array.isArray(pending.candidates) ? pending.candidates : [];
+  const candidateIds = rawCandidates
+    .filter((candidate): candidate is string => typeof candidate === 'string')
+    .map((candidate) => players.find((player) => player.id === candidate || player.name === candidate)?.id || candidate);
+  const eliminateCount = Number.isInteger(pending.eliminateCount)
+    ? Number(pending.eliminateCount)
+    : Number(pending.eliminateFromCandidates);
+
+  if (!candidateIds.length || !Number.isInteger(eliminateCount) || eliminateCount <= 0 || eliminateCount >= candidateIds.length) return null;
+  return {
+    round: pending.round,
+    candidateIds,
+    eliminateCount,
+    automaticallyEliminatedIds: Array.isArray(pending.automaticallyEliminatedIds)
+      ? pending.automaticallyEliminatedIds.filter((id): id is string => typeof id === 'string')
+      : [],
+  };
 }
 
 export function questionsForRound(banks: QuestionBanks, round: QuestionRound): Question[] {

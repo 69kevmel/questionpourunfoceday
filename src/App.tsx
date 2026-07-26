@@ -767,6 +767,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
   }
 
   async function handleResetGame() {
+    if (!window.confirm('Réinitialiser la partie et supprimer tous les joueurs ?')) return;
     await saveGameState(createGameState());
   }
 
@@ -805,7 +806,10 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
             </h1>
             <p className="text-muted mt-1">{active.length} joueur(s) actif(s) en course</p>
           </div>
-          <button disabled title="Les questions sont verrouillées pendant la partie" className="py-2 px-5 rounded-xl font-bold bg-[#64646433] text-muted border border-line opacity-60">Questions verrouillées</button>
+          <div className="flex flex-wrap gap-2">
+            <button disabled title="Les questions sont verrouillées pendant la partie" className="py-2 px-5 rounded-xl font-bold bg-[#64646433] text-muted border border-line opacity-60">Questions verrouillées</button>
+            <button onClick={handleResetGame} className="py-2 px-5 rounded-xl font-bold bg-reset-bg text-gold-dark border border-reset-border">Réinitialiser</button>
+          </div>
         </div>
         {gameState.lastElimination && (
           <div className="rounded-xl p-4 bg-danger-strong/12 border border-danger-dark">
@@ -825,6 +829,13 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
               })}
             </div>
             <button onClick={handleResolveTie} disabled={tieSelection.length !== gameState.pendingElimination.eliminateCount} className="w-full py-3 rounded-xl font-bold bg-brand-green text-dark-ink disabled:opacity-40">Valider le départage</button>
+          </div>
+        )}
+        {gameState.phase === 'tiebreak' && !gameState.pendingElimination && (
+          <div className="rounded-2xl p-6 text-center bg-danger-strong/15 border-2 border-danger-dark">
+            <p className="text-danger text-lg font-bold mb-2">Départage incomplet</p>
+            <p className="text-body text-sm mb-4">L'état du départage n'a pas été conservé. Réinitialise la partie pour repartir proprement.</p>
+            <button onClick={handleResetGame} className="px-5 py-3 rounded-xl font-bold bg-reset-bg text-gold-dark border border-reset-border">Réinitialiser la partie</button>
           </div>
         )}
         {question && gameState.phase !== 'tiebreak' && !gameOver && (
@@ -1159,6 +1170,12 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
             <p className="text-gold text-xs font-bold tracking-[1px] mb-2">DÉPARTAGE</p>
             <p className="text-ink text-2xl font-heading font-bold">Égalité au seuil d'élimination</p>
             <p className="text-body mt-2">L'animateur départage {gameState.pendingElimination.candidateIds.map((id) => gameState.players.find((player) => player.id === id)?.name).filter(Boolean).join(', ')}.</p>
+          </div>
+        )}
+        {gameState.phase === 'tiebreak' && !gameState.pendingElimination && (
+          <div className="mb-8 rounded-3xl p-8 text-center bg-warn-bg border-2 border-warn-border">
+            <p className="text-gold text-xs font-bold tracking-[1px] mb-2">DÉPARTAGE</p>
+            <p className="text-ink text-2xl font-heading font-bold">L'animateur prépare le départage</p>
           </div>
         )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

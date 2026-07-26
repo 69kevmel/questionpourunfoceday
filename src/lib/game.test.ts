@@ -8,6 +8,7 @@ import {
   createGameState,
   decideElimination,
   isValidPlayerName,
+  normalizeGameState,
   resolveEliminationTie,
   type GameState,
   type QuestionBanks,
@@ -72,6 +73,22 @@ describe('égalités et finale', () => {
     expect(resolved.phase).toBe('question');
     expect(resolved.round).toBe('simultaneous');
     expect(resolved.activePlayerIds).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
+  });
+
+  it('conserve le départage lorsque Firebase supprime le tableau vide', () => {
+    const initial = stateWithPlayers(8);
+    const tied = { ...initial, players: initial.players.map((player) => ({ ...player, score: 0 })) };
+    const pending = advanceGame(tied, banks);
+    const firebaseValue = JSON.parse(JSON.stringify(pending)) as Record<string, unknown>;
+    const serializedPending = firebaseValue.pendingElimination as Record<string, unknown>;
+    delete serializedPending.automaticallyEliminatedIds;
+
+    expect(normalizeGameState(firebaseValue).pendingElimination).toEqual({
+      round: 'buzzer',
+      candidateIds: tied.activePlayerIds,
+      eliminateCount: 3,
+      automaticallyEliminatedIds: [],
+    });
   });
 
   it('termine la finale avec un leader unique', () => {
