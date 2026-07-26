@@ -355,31 +355,47 @@ function ConsentScreen({ playerName, onAccept, onReject }: { playerName: string;
 
 function LobbyPlayerView({ gameState, playerName, playerId, onRegistered, onBack }: { gameState: GameState; playerName: string; playerId: string; onRegistered: (id: string) => void; onBack: () => void }) {
   const registeredRef = useRef(false);
-  const [registrationId] = useState(() => playerId || `player-${timestamp()}-${Math.random().toString(36).slice(2, 8)}`);
+  const registrationStartedRef = useRef(false);
+  const [registrationId] = useState(() => {
+    const returningPlayer = gameState.players.find((player) => player.id === playerId && player.name === playerName);
+    return returningPlayer?.id || `player-${timestamp()}-${Math.random().toString(36).slice(2, 8)}`;
+  });
   const [registrationError, setRegistrationError] = useState('');
   useEffect(() => {
-    if (registeredRef.current) return;
+    if (registeredRef.current || registrationStartedRef.current) return;
     const alreadyKnown = gameState.players.some((player) => player.id === playerId && player.name === playerName);
     if (alreadyKnown) { registeredRef.current = true; return; }
     if (!db) return;
     async function registerPlayer() {
-      const stateRef = ref(db!, STATE_PATH);
-      const id = registrationId;
-      const result = await runTransaction(stateRef, (current: unknown) => {
-        const base = normalizeGameState(current);
-        if (base.gameStarted || base.players.length >= MAX_PLAYERS || !isValidPlayerName(playerName)) return base;
-        if (base.players.some((player) => player.id === id)) return base;
-        if (base.players.some((player) => player.name.toLocaleLowerCase() === playerName.toLocaleLowerCase())) return base;
-        return { ...base, players: [...base.players, { id, name: playerName, score: 0 }], activePlayerIds: [...base.activePlayerIds, id] };
-      });
-      const saved = normalizeGameState(result.snapshot.val()).players.some((player) => player.id === id && player.name === playerName);
-      if (saved) {
+      registrationStartedRef.current = true;
+      try {
+        const stateRef = ref(db!, STATE_PATH);
+        const id = registrationId;
+        const result = await runTransaction(stateRef, (current: unknown) => {
+          const base = normalizeGameState(current);
+          if (base.gameStarted || base.players.length >= MAX_PLAYERS || !isValidPlayerName(playerName)) return;
+          if (base.players.some((player) => player.id === id)) return;
+          if (base.players.some((player) => player.name.toLocaleLowerCase() === playerName.toLocaleLowerCase())) return;
+          return { ...base, players: [...base.players, { id, name: playerName, score: 0 }], activePlayerIds: [...base.activePlayerIds, id] };
+        });
+        const savedState = normalizeGameState(result.snapshot.val());
+        const saved = savedState.players.some((player) => player.id === id && player.name === playerName);
+        if (saved) {
+          registeredRef.current = true;
+          sessionStorage.setItem('fonceday-player-id', id);
+          onRegistered(id);
+          return;
+        }
+
         registeredRef.current = true;
-        sessionStorage.setItem('fonceday-player-id', id);
-        onRegistered(id);
-      } else {
-        registeredRef.current = true;
-        setRegistrationError(gameState.players.length >= MAX_PLAYERS ? 'Le lobby est complet.' : 'Ce pseudo est déjà utilisé. Choisis-en un autre.');
+        if (savedState.gameStarted) setRegistrationError('La partie a déjà commencé.');
+        else if (savedState.players.length >= MAX_PLAYERS) setRegistrationError('Le lobby est complet.');
+        else if (savedState.players.some((player) => player.name.toLocaleLowerCase() === playerName.toLocaleLowerCase())) setRegistrationError('Ce pseudo est déjà utilisé. Choisis-en un autre.');
+        else setRegistrationError("L'inscription a échoué. Réessaie avec un autre pseudo.");
+      } catch (error) {
+        console.error('Inscription impossible', error);
+        registrationStartedRef.current = false;
+        setRegistrationError('Connexion impossible. Réessaie dans un instant.');
       }
     }
     void registerPlayer();
