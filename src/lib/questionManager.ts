@@ -4,7 +4,9 @@ import { db } from '../firebase';
 import type { Question, QuestionBanks, QuestionRound } from './game';
 
 const QUESTIONS_PATH = 'fonceday-question-banks';
-const LEGACY_QUESTIONS_PATH = 'fonceday-questions';
+const QUESTION_BANK_VERSION = 20260726;
+
+type StoredQuestionBanks = Partial<QuestionBanks> & { _version?: number };
 
 function cloneDefaults(): QuestionBanks {
   return JSON.parse(JSON.stringify(defaultQuestionBanks)) as QuestionBanks;
@@ -20,6 +22,20 @@ function normalizeBanks(value: unknown): QuestionBanks {
   };
 }
 
+function storedVersion(value: unknown): number {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
+  return Number((value as StoredQuestionBanks)._version) || 0;
+}
+
+async function replaceOutdatedBanks(): Promise<QuestionBanks> {
+  if (!db) return cloneDefaults();
+  const result = await runTransaction(ref(db, QUESTIONS_PATH), (current) => {
+    if (storedVersion(current) >= QUESTION_BANK_VERSION) return;
+    return { ...cloneDefaults(), _version: QUESTION_BANK_VERSION };
+  });
+  return normalizeBanks(result.snapshot.val());
+}
+
 export function loadQuestionBanks(callback: (banks: QuestionBanks) => void, onError?: (error: Error) => void): () => void {
   if (!db) {
     callback(cloneDefaults());
@@ -28,17 +44,8 @@ export function loadQuestionBanks(callback: (banks: QuestionBanks) => void, onEr
   const database = db;
   return onValue(ref(database, QUESTIONS_PATH), async (snapshot) => {
     const value = snapshot.val();
-    if (!value) {
-      const legacy = (await get(ref(database, LEGACY_QUESTIONS_PATH))).val();
-      const migrated = Array.isArray(legacy) && legacy.length > 0
-        ? {
-            buzzer: legacy.slice(0, 9).map((question) => ({ ...question, round: 'buzzer' as const, type: 'qcm' as const })),
-            simultaneous: legacy.slice(9, 17).map((question) => ({ ...question, round: 'simultaneous' as const, type: 'qcm' as const })),
-            final: legacy.slice(17).map((question) => ({ ...question, round: 'final' as const, type: 'qcm' as const })),
-          }
-        : cloneDefaults();
-      await runTransaction(ref(database, QUESTIONS_PATH), (current) => current || migrated);
-      callback(migrated);
+    if (storedVersion(value) < QUESTION_BANK_VERSION) {
+      callback(await replaceOutdatedBanks());
       return;
     }
     callback(normalizeBanks(value));
@@ -51,7 +58,10 @@ export function loadQuestionBanks(callback: (banks: QuestionBanks) => void, onEr
 
 export function updateQuestionBanks(update: (banks: QuestionBanks) => QuestionBanks): Promise<void> {
   if (!db) throw new Error('Firebase non disponible');
-  return runTransaction(ref(db, QUESTIONS_PATH), (current) => update(normalizeBanks(current))).then(() => undefined);
+  return runTransaction(ref(db, QUESTIONS_PATH), (current) => ({
+    ...update(storedVersion(current) >= QUESTION_BANK_VERSION ? normalizeBanks(current) : cloneDefaults()),
+    _version: QUESTION_BANK_VERSION,
+  })).then(() => undefined);
 }
 
 export async function addQuestion(round: QuestionRound, question: Omit<Question, 'id' | 'round'>): Promise<void> {
@@ -82,5 +92,5 @@ export async function reorderQuestions(round: QuestionRound, ids: number[]): Pro
 export async function getQuestionBanks(): Promise<QuestionBanks> {
   if (!db) return cloneDefaults();
   const value = (await get(ref(db, QUESTIONS_PATH))).val();
-  return value ? normalizeBanks(value) : cloneDefaults();
+  return storedVersion(value) >= QUESTION_BANK_VERSION ? normalizeBanks(value) : replaceOutdatedBanks();
 }
