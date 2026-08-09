@@ -4,7 +4,7 @@ import { db } from '../firebase';
 import type { Question, QuestionBanks, QuestionRound } from './game';
 
 const QUESTIONS_PATH = 'fonceday-question-banks';
-const QUESTION_BANK_VERSION = 20260726;
+const QUESTION_BANK_VERSION = 20260809;
 
 type StoredQuestionBanks = Partial<QuestionBanks> & { _version?: number };
 
