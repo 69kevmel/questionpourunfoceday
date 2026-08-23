@@ -1,6 +1,6 @@
 # Fonceday Live
 
-Jeu de quiz en direct (animateur / joueurs / vue live pour le stream), avec buzzer, élimination
+Jeu de quiz en direct (animateur / joueurs / vue live pour le stream), avec choix multiple, élimination
 progressive par manche, et synchronisation temps réel entre tous les appareils via Firebase
 Realtime Database.
 
@@ -41,7 +41,8 @@ serveur.
 
 ## Partie
 
-- Une partie accepte de 5 à 15 joueurs.
+- Une partie accepte de 3 à 15 joueurs.
+- La première manche est un QCM simultané : une seule réponse par joueur en 15 secondes.
 - La vue publique est disponible sur `/live`.
 - Les égalités au seuil d'élimination sont départagées par l'animateur.
 - La finale utilise un score dédié et continue en mort subite en cas d'égalité.

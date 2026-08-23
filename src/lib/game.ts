@@ -25,12 +25,6 @@ export interface Player {
   score: number;
 }
 
-export interface CurrentBuzz {
-  playerId: string;
-  name: string;
-  ts: number;
-}
-
 export interface SubmittedAnswer {
   value: string;
   submittedAt: number;
@@ -63,8 +57,6 @@ export interface GameState {
   phase: GamePhase;
   round: QuestionRound;
   questionIndex: number;
-  currentBuzz: CurrentBuzz | null;
-  wrongBuzzers: string[];
   submittedAnswers: Record<string, SubmittedAnswer>;
   answerOutcomes: Record<string, AnswerOutcome>;
   timerEndsAt: number | null;
@@ -84,8 +76,6 @@ export function createGameState(): GameState {
     phase: 'lobby',
     round: 'buzzer',
     questionIndex: 0,
-    currentBuzz: null,
-    wrongBuzzers: [],
     submittedAnswers: {},
     answerOutcomes: {},
     timerEndsAt: null,
@@ -115,6 +105,8 @@ export function normalizeGameState(raw: unknown): GameState {
   delete state.pause;
   delete state.usedJokers;
   delete state.fiftyFiftyPlayers;
+  delete state.currentBuzz;
+  delete state.wrongBuzzers;
   const players = Array.isArray(state.players)
     ? state.players.map((player, index) => ({
         id: player.id || `legacy-${index}-${player.name}`,
@@ -131,7 +123,6 @@ export function normalizeGameState(raw: unknown): GameState {
     phase: phase || base.phase,
     players,
     activePlayerIds,
-    wrongBuzzers: Array.isArray(state.wrongBuzzers) ? state.wrongBuzzers : [],
     submittedAnswers: state.submittedAnswers && typeof state.submittedAnswers === 'object' ? state.submittedAnswers : {},
     answerOutcomes: state.answerOutcomes && typeof state.answerOutcomes === 'object' ? state.answerOutcomes : {},
     finalScores: state.finalScores && typeof state.finalScores === 'object' ? state.finalScores : {},
@@ -241,9 +232,7 @@ export function decideElimination(state: GameState, count: number): EliminationD
 function questionState(state: GameState, updates: Partial<GameState>): GameState {
   return {
     ...state,
-    currentBuzz: null,
     phase: 'question',
-    wrongBuzzers: [],
     submittedAnswers: {},
     answerOutcomes: {},
     timerEndsAt: null,
@@ -275,7 +264,6 @@ export function advanceGame(state: GameState, banks: QuestionBanks): GameState {
       ...state,
       activePlayerIds: decision.keptIds,
       phase: 'tiebreak',
-      currentBuzz: null,
       timerEndsAt: null,
       pendingElimination: {
         round: state.round,

@@ -15,8 +15,8 @@ interface QuestionForm {
 }
 
 const ROUND_LABELS: Record<QuestionRound, string> = {
-  buzzer: 'Manche buzzer',
-  simultaneous: 'Manche simultanee',
+  buzzer: 'Manche choix multiple',
+  simultaneous: 'Manche simultanée',
   final: 'Banque finale',
 };
 
@@ -110,15 +110,15 @@ export default function QuestionManager({ onExit }: { onExit: () => void }) {
           <section className="rounded-xl border border-brand-green/27 bg-panel/90 p-5 sm:p-6">
             <div className="flex flex-col gap-5">
               <label className="text-sm font-bold text-body">Liste
-                <select value={form.round} onChange={(event) => setForm((current) => ({ ...current, round: event.target.value as QuestionRound }))} className="mt-2 w-full rounded-lg border border-line bg-black/30 px-3 py-2 text-ink">
-                  <option value="buzzer">Manche buzzer</option>
-                  <option value="simultaneous">Manche simultanee</option>
+                <select value={form.round} onChange={(event) => { const nextRound = event.target.value as QuestionRound; setForm((current) => ({ ...current, round: nextRound, type: nextRound === 'buzzer' ? 'qcm' : current.type })); }} className="mt-2 w-full rounded-lg border border-line bg-black/30 px-3 py-2 text-ink">
+                  <option value="buzzer">Manche choix multiple</option>
+                  <option value="simultaneous">Manche simultanée</option>
                   <option value="final">Banque finale</option>
                 </select>
               </label>
               <label className="text-sm font-bold text-body">Type de question
-                <select value={form.type} onChange={(event) => setForm((current) => ({ ...current, type: event.target.value as QuestionType }))} className="mt-2 w-full rounded-lg border border-line bg-black/30 px-3 py-2 text-ink">
-                  <option value="qcm">Choix multiples (4 reponses)</option>
+                <select value={form.type} disabled={form.round === 'buzzer'} onChange={(event) => setForm((current) => ({ ...current, type: event.target.value as QuestionType }))} className="mt-2 w-full rounded-lg border border-line bg-black/30 px-3 py-2 text-ink disabled:opacity-60">
+                  <option value="qcm">QCM (4 choix, une seule réponse)</option>
                   <option value="numeric">Chiffre le plus proche / valeur exacte</option>
                   <option value="free-text">Sans choix de reponse</option>
                 </select>
@@ -158,7 +158,7 @@ export default function QuestionManager({ onExit }: { onExit: () => void }) {
           <button onClick={() => openAdd()} className="rounded-lg bg-brand-green px-5 py-3 font-bold text-dark-ink">Ajouter</button>
         </header>
         <nav className="grid grid-cols-1 gap-2 sm:grid-cols-3">{(Object.keys(ROUND_LABELS) as QuestionRound[]).map((key) => <button key={key} onClick={() => setRound(key)} className={`rounded-lg border px-3 py-3 text-sm font-bold ${round === key ? 'border-brand-green bg-brand-green/15 text-brand-green' : 'border-line bg-panel/70 text-muted'}`}>{ROUND_LABELS[key]} ({banks[key].length})</button>)}</nav>
-        <p className="text-sm text-muted">La manche buzzer et la manche simultanee sont jouees integralement. La banque finale est utilisee pour les departages et la finale a deux.</p>
+        <p className="text-sm text-muted">La manche choix multiple et la manche simultanée sont jouées intégralement. La banque finale est utilisée pour les départages et la finale à deux.</p>
         <section className="flex flex-col gap-3">
           {questions.length === 0 && <p className="rounded-lg border border-line bg-panel/70 p-5 text-center text-muted">Aucune question dans cette liste.</p>}
           {questions.map((question, index) => <article key={question.id} className="flex gap-3 rounded-xl border border-brand-green/20 bg-panel/85 p-4">

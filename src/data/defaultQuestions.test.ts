@@ -2,33 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { defaultQuestionBanks } from './defaultQuestions';
 
 const verifiedQcmAnswers = new Map([
-  [1, 'Le mercure'],
-  [2, 'Le pancréas'],
-  [3, 'Le dioxyde de carbone'],
-  [4, 'Le Nil'],
-  [5, 'Le yen'],
-  [6, 'Antoine de Saint-Exupéry'],
-  [7, 'Le guépard'],
-  [8, "L'Australie"],
-  [9, 'Le diamant'],
-  [10, 'Cinq'],
-  [201, 'La mole'],
-  [202, 'Isaac Newton'],
-  [203, 'Le Vatican'],
-  [204, 'Le fémur'],
-  [205, '1989'],
-  [206, "L'hydrogène"],
-  [207, 'Vincent van Gogh'],
-  [208, 'Le Tigre'],
-  [209, 'Uranus'],
-  [210, 'Samuel Beckett'],
+  [301, 'Blanche-Neige et les Sept Nains'],
+  [302, 'Tétrahydrocannabinol'],
+  [303, 'Ottawa'],
+  [304, 'Jupiter'],
+  [305, 'Pablo Picasso'],
+  [306, 'Le portugais'],
+  [307, 'Au'],
+  [308, '12'],
+  [309, 'Neil Armstrong'],
+  [310, "L'océan Indien"],
+  [501, 'Le grec ancien'],
+  [502, 'La fosse des Mariannes'],
+  [503, 'George Orwell'],
+  [504, '26'],
+  [505, 'Wellington'],
+  [506, 'Tim Berners-Lee'],
+  [507, 'Le Pérou'],
+  [508, 'Le Voyage de Chihiro'],
+  [509, 'La baleine bleue'],
+  [510, 'Vénus'],
 ]);
 
 describe('banques de questions par défaut', () => {
   it('contient toutes les questions attendues dans la bonne manche', () => {
-    expect(defaultQuestionBanks.buzzer.map((question) => question.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    expect(defaultQuestionBanks.simultaneous.map((question) => question.id)).toEqual([101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111]);
-    expect(defaultQuestionBanks.final.map((question) => question.id)).toEqual([201, 202, 203, 204, 205, 206, 207, 208, 209, 210]);
+    expect(defaultQuestionBanks.buzzer.map((question) => question.id)).toEqual([301, 302, 303, 304, 305, 306, 307, 308, 309, 310]);
+    expect(defaultQuestionBanks.simultaneous.map((question) => question.id)).toEqual([401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411]);
+    expect(defaultQuestionBanks.final.map((question) => question.id)).toEqual([501, 502, 503, 504, 505, 506, 507, 508, 509, 510]);
 
     for (const question of defaultQuestionBanks.buzzer) {
       expect(question).toMatchObject({ round: 'buzzer', type: 'qcm' });
@@ -58,17 +58,17 @@ describe('banques de questions par défaut', () => {
 
   it('conserve les valeurs simultanées vérifiées', () => {
     expect(defaultQuestionBanks.simultaneous.map((question) => question.numericAnswer)).toEqual([
-      88,
-      42_195,
-      206,
-      151,
-      236,
-      330,
-      384_400,
-      604_800,
-      11,
-      299_792_458,
-      204,
+      52,
+      5,
+      27,
+      15,
+      24,
+      8,
+      2,
+      60,
+      6,
+      7,
+      21,
     ]);
   });
 });

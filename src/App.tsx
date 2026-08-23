@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { ref, onValue, runTransaction } from 'firebase/database';
 import { db, isFirebaseConfigured } from './firebase';
-import buzzSoundUrl from './assets/dry-cough-soundbible.mp3';
 import fonceyPosterUrl from './assets/fonceday-poster.webp';
 import QuestionManager from './components/QuestionManager';
 import { loadQuestionBanks } from './lib/questionManager';
@@ -29,18 +28,6 @@ let serverTimeOffsetMs = 0;
 
 type SaveGameState = (newState: GameState) => Promise<void>;
 type Role = 'host' | 'join' | 'consent' | 'lobby' | null;
-
-const buzzAudio = typeof Audio !== 'undefined' ? new Audio(buzzSoundUrl) : null;
-
-function playBuzzSound() {
-  if (!buzzAudio) return;
-  try {
-    buzzAudio.currentTime = 0;
-    void buzzAudio.play();
-  } catch (e) {
-    console.error('Son disabled:', e);
-  }
-}
 
 // ============ HELPERS ============
 
@@ -467,7 +454,6 @@ function SpectatorView({ gameState }: { gameState: GameState }) {
 // ============ PLAYER VIEW ============
 
 function PlayerView({ gameState, banks, playerName }: { gameState: GameState; banks: QuestionBanks; playerName: string }) {
-  const prevBuzzRef = useRef(gameState.currentBuzz);
   const timerLeft = useCountdown(gameState.timerEndsAt, gameState.phase === 'question');
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [numericInput, setNumericInput] = useState('');
@@ -476,13 +462,6 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
   const question = getCurrentQuestion(gameState, banks);
   const submission = gameState.submittedAnswers[playerId] || gameState.submittedAnswers[playerName];
   const submitted = submission?.round === gameState.round && submission.questionIndex === gameState.questionIndex;
-
-  useEffect(() => {
-    if (gameState.currentBuzz && !prevBuzzRef.current && gameState.currentBuzz.playerId !== playerId) {
-      playBuzzSound();
-    }
-    prevBuzzRef.current = gameState.currentBuzz;
-  }, [gameState.currentBuzz, playerId]);
 
   async function submitAnswer(value: string) {
     if (!question || submitted || !value.trim()) return;
@@ -503,18 +482,6 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
     });
   }
 
-  async function handleBuzz() {
-    if (gameState.currentBuzz || gameState.round !== 'buzzer') return;
-    playBuzzSound();
-    const buzzedAt = timestamp();
-    const expectedIndex = gameState.questionIndex;
-    await updateGameState((current) => {
-      if (current.phase !== 'question' || current.round !== 'buzzer' || current.questionIndex !== expectedIndex || current.currentBuzz) return current;
-      if (!current.activePlayerIds.includes(playerId) || current.wrongBuzzers.includes(playerId)) return current;
-      return { ...current, currentBuzz: { playerId, name: playerName, ts: buzzedAt } };
-    });
-  }
-
   function handleValidate() {
     if (!question) return;
     const value = question.type === 'qcm'
@@ -526,28 +493,12 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
   const allPlayers = gameState.players || [];
   const playerScore = allPlayers.find((player) => player.name === playerName)?.score || 0;
   const playerRank = [...allPlayers].sort((a, b) => b.score - a.score).findIndex((player) => player.name === playerName) + 1;
-  const iBuzzed = gameState.currentBuzz?.playerId === playerId;
-  const someoneElseBuzzed = !!gameState.currentBuzz && gameState.currentBuzz.playerId !== playerId;
-  const alreadyWrong = gameState.wrongBuzzers.includes(playerId);
-  const active = gameState.activePlayerIds.includes(playerId);
   const canSubmit = gameState.phase === 'question' && timerLeft > 0 && !submitted;
-
-  const buzzDisabled = !!gameState.currentBuzz || alreadyWrong || gameState.round !== 'buzzer';
-  const buzzBg = gameState.currentBuzz ? (iBuzzed ? 'bg-linear-to-br from-gold to-gold-dark' : 'bg-buzzed') : alreadyWrong ? 'bg-buzzed' : 'bg-linear-to-br from-brand-green to-brand-green-dark';
-  const buzzText = 'text-dark-ink';
-  const buzzShadow = !buzzDisabled ? 'shadow-[0_0_50px_rgba(57,255,106,0.55),0_10px_30px_rgba(0,0,0,0.5)]' : '';
-
-  let buzzLabel = 'BUZZ';
-  if (gameState.currentBuzz) { buzzLabel = iBuzzed ? "C'EST TOI !" : 'BUZZÉ'; }
-  else if (alreadyWrong) { buzzLabel = 'DÉJÀ TENTÉ'; }
 
   function renderQuestionContent() {
     if (!question) return null;
     if (gameState.phase === 'review') return <AnswerReveal question={question} selectedValue={submission?.value} compact />;
     if (gameState.phase === 'tiebreak') return <div className="p-4 rounded-lg text-center bg-gold/10 border border-gold-dark"><p className="text-gold font-bold">Départage en cours avec l'animateur</p></div>;
-    if (gameState.round === 'buzzer') return question.type === 'qcm'
-      ? <QuestionOptions question={question} />
-      : <div className="p-4 rounded-lg text-center bg-brand-green/8 border border-dashed border-brand-green/33"><p className="text-[13px] font-bold text-muted">Buzz puis réponds oralement sur Discord</p></div>;
     if (!gameState.timerEndsAt) return <div className="p-4 rounded-lg text-center bg-black/30 border border-line"><p className="text-sm font-bold text-muted">En attente du lancement du timer</p></div>;
     if (submitted) return <div className="p-4 rounded-lg text-center bg-brand-green/10 border border-brand-green"><p className="font-bold text-brand-green">Réponse envoyée</p><p className="mt-1 text-sm text-body">{submission.value}</p></div>;
 
@@ -589,18 +540,6 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
             {renderQuestionContent()}
           </div>
         )}
-        {gameState.phase === 'question' && gameState.round === 'buzzer' && active && (
-          <button onClick={handleBuzz} disabled={buzzDisabled} className={`rounded-full flex items-center justify-center font-black transition-transform active:scale-95 disabled:active:scale-100 w-[200px] h-[200px] text-[28px] border-4 border-white/15 ${buzzBg} ${buzzText} ${buzzShadow}`}>
-            {buzzLabel}
-          </button>
-        )}
-        {gameState.phase === 'question' && gameState.round === 'buzzer' && !active && (
-          <div className="rounded-full flex items-center justify-center w-[200px] h-[200px] text-[28px] border-4 border-white/15 bg-buzzed text-muted font-black">ÉLIMINÉ</div>
-        )}
-        <p className="text-muted min-h-[20px] text-sm text-center">
-          {someoneElseBuzzed && `${gameState.currentBuzz!.name} a buzzé`}
-          {!gameState.currentBuzz && alreadyWrong && "Tu t'es déjà trompé sur cette question, attends la suivante"}
-        </p>
         <div className="mt-2 w-full max-w-md p-3 rounded-xl bg-panel/70 border border-brand-green/20">
           <div className="flex items-center justify-between mb-2">
             <p className="text-muted text-xs font-bold">Classement en direct</p>
@@ -616,9 +555,7 @@ function PlayerView({ gameState, banks, playerName }: { gameState: GameState; ba
 // ============ HOST VIEW ============
 
 function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartTest, onPreviewLive }: { gameState: GameState; banks: QuestionBanks; saveGameState: SaveGameState; onManageQuestions: () => void; onStartTest?: () => void; onPreviewLive?: () => void }) {
-  const prevBuzzRef = useRef(gameState.currentBuzz);
   const [tieSelection, setTieSelection] = useState<string[]>([]);
-  useEffect(() => { if (gameState.currentBuzz && !prevBuzzRef.current) playBuzzSound(); prevBuzzRef.current = gameState.currentBuzz; }, [gameState.currentBuzz]);
 
   const allPlayers = gameState.players || [];
   const sorted = [...allPlayers].sort((a, b) => b.score - a.score);
@@ -629,57 +566,13 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
 
   if (!gameState.gameStarted) return <HostLobbyView gameState={gameState} banks={banks} saveGameState={saveGameState} onManageQuestions={onManageQuestions} onStartTest={onStartTest} onPreviewLive={onPreviewLive} />;
 
-  async function handleGoodAnswer() {
-    const expectedBuzz = gameState.currentBuzz;
-    const expectedIndex = gameState.questionIndex;
-    if (!expectedBuzz) return;
-    await updateGameState((current) => {
-      const buzz = current.currentBuzz;
-      if (current.phase !== 'question' || current.round !== 'buzzer' || current.questionIndex !== expectedIndex || !buzz) return current;
-      if (buzz.playerId !== expectedBuzz.playerId || buzz.ts !== expectedBuzz.ts) return current;
-      if (!current.players.some((player) => player.id === buzz.playerId)) return current;
-      return {
-        ...current,
-        players: current.players.map((player) => player.id === buzz.playerId ? { ...player, score: player.score + 1 } : player),
-        answerOutcomes: { [buzz.playerId]: { value: 'Réponse orale', correct: true, points: 1 } },
-        currentBuzz: null,
-        phase: 'review',
-        wrongBuzzers: [],
-      };
-    });
-  }
-
-  async function handleWrongAnswer() {
-    const expectedBuzz = gameState.currentBuzz;
-    const expectedIndex = gameState.questionIndex;
-    if (!expectedBuzz) return;
-    await updateGameState((current) => {
-      if (current.phase !== 'question' || current.round !== 'buzzer' || current.questionIndex !== expectedIndex || !current.currentBuzz) return current;
-      if (current.currentBuzz.playerId !== expectedBuzz.playerId || current.currentBuzz.ts !== expectedBuzz.ts) return current;
-      return {
-        ...current,
-        currentBuzz: null,
-        wrongBuzzers: [...new Set([...current.wrongBuzzers, current.currentBuzz.playerId])],
-      };
-    });
-  }
-
-  async function handleRevealOptions() {
-    const expectedRound = gameState.round;
-    const expectedIndex = gameState.questionIndex;
-    await updateGameState((current) => {
-      if (current.phase !== 'question' || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
-      return { ...current, phase: 'review', currentBuzz: null, timerEndsAt: null };
-    });
-  }
-
   async function handleStartTimer() {
     if (!question) return;
     const expectedRound = gameState.round;
     const expectedIndex = gameState.questionIndex;
     const endsAt = timestamp() + timerDuration(question);
     await updateGameState((current) => {
-      if (current.phase !== 'question' || current.round === 'buzzer' || current.timerEndsAt) return current;
+      if (current.phase !== 'question' || current.timerEndsAt) return current;
       if (current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
       return { ...current, timerEndsAt: endsAt };
     });
@@ -692,7 +585,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
     await updateGameState((current) => {
       if (current.phase !== 'question' || current.round !== expectedRound || current.questionIndex !== expectedIndex) return current;
       const currentQuestion = getCurrentQuestion(current, banks);
-      if (!currentQuestion || current.round === 'buzzer') return current;
+      if (!currentQuestion) return current;
       const allSubmitted = getActivePlayers(current).every((player) => Boolean(getSubmission(current, player.id, player.name)));
       if (!allSubmitted && (!current.timerEndsAt || resolvedAt < current.timerEndsAt)) return current;
       const winnerIds = getQuestionWinnerIds(current, currentQuestion);
@@ -709,7 +602,6 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
         answerOutcomes,
         timerEndsAt: null,
         phase: 'review',
-        currentBuzz: null,
       };
     });
   }
@@ -756,7 +648,7 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
         </div>
         {gameState.lastElimination && (
           <div className="rounded-xl p-4 bg-danger-strong/12 border border-danger-dark">
-            <p className="text-danger font-bold mb-1">🚫 Fin de manche {gameState.lastElimination.round} — Éliminé(s) : {gameState.lastElimination.eliminatedNames.join(', ')}</p>
+            <p className="text-danger font-bold mb-1">🚫 Fin de {roundLabel(gameState.lastElimination.round).toLowerCase()} — Éliminé(s) : {gameState.lastElimination.eliminatedNames.join(', ')}</p>
             <p className="text-body text-[13px]">Il reste {gameState.lastElimination.remaining} joueur(s) en course.</p>
           </div>
         )}
@@ -834,19 +726,9 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
               <p className="text-muted text-sm mb-3 font-bold">📚 DÉBRIEFING</p>
               <p className="text-gold text-sm mb-3">La bonne réponse est en évidence ci-dessus. Débattez ! 💬</p>
             </>
-          ) : gameState.currentBuzz ? (
-            <>
-              <p className="text-muted text-sm mb-2">Buzzé</p>
-              <p className="text-4xl font-black mb-6 text-brand-green [text-shadow:0_0_20px_rgba(57,255,106,0.5)]">{gameState.currentBuzz.name}</p>
-              <div className="flex gap-3">
-                <button onClick={handleGoodAnswer} className="flex-1 py-3 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">✓ Bonne (+1)</button>
-                <button onClick={handleWrongAnswer} className="flex-1 py-3 rounded-xl font-bold transition-transform active:scale-95 bg-warn-bg text-gold-dark border border-warn-border">✗ Mauvaise</button>
-              </div>
-            </>
           ) : gameState.phase === 'question' ? (
             <>
               <p className="text-muted text-sm mb-1 font-bold">⏳ En attente de réponses...</p>
-              {gameState.wrongBuzzers.length > 0 && <p className="text-danger text-[13px] mb-3">Déjà écarté(s) sur cette question : {gameState.wrongBuzzers.map((id) => gameState.players.find((p) => p.id === id)?.name).join(', ')}</p>}
               {question?.type === 'numeric' && (
                 <div className="mb-3">
                   <p className="text-body text-sm mb-2">Réponses reçues :</p>
@@ -889,9 +771,8 @@ function HostView({ gameState, banks, saveGameState, onManageQuestions, onStartT
               )}
               {question?.type === 'free-text' && gameState.timerEndsAt && <button onClick={handleResolveAnswers} className="w-full mb-3 py-2 rounded-lg bg-brand-green text-dark-ink font-bold">Résoudre les réponses</button>}
               <div className="flex gap-3">
-                {gameState.round === 'buzzer' && <button onClick={handleRevealOptions} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-warn-bg text-gold-dark border border-warn-border">Montrer la réponse 👀</button>}
                 <button onClick={handleSkipQuestion} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-[#64646433] text-muted border border-line">Passer ⏭️</button>
-                {gameState.round !== 'buzzer' && !gameState.timerEndsAt && (
+                {!gameState.timerEndsAt && (
                   <button onClick={handleStartTimer} className="w-full py-3 rounded-xl font-bold transition-transform active:scale-95 bg-linear-to-br from-brand-green to-brand-green-dark text-dark-ink">▶️ Commencer le timer</button>
                 )}
               </div>
@@ -967,7 +848,6 @@ function HostLobbyView({ gameState, banks, saveGameState, onManageQuestions, onS
         phase: 'question',
         round: 'buzzer',
         questionIndex: 0,
-        currentBuzz: null,
         submittedAnswers: {},
         answerOutcomes: {},
         finalScores: {},
@@ -1035,7 +915,7 @@ function TestModeView({ onExit }: { onExit: () => void }) {
         </div>
         <p className="text-muted text-sm">Cette simulation est locale et ne modifie pas la partie Firebase.</p>
         <div className="rounded-xl overflow-hidden border border-brand-green/20 bg-panel/80">
-          <div className="grid grid-cols-4 gap-2 p-3 text-xs font-bold text-muted border-b border-line"><span>Joueurs</span><span>Buzzer</span><span>Simultanée</span><span>Finale</span></div>
+          <div className="grid grid-cols-4 gap-2 p-3 text-xs font-bold text-muted border-b border-line"><span>Joueurs</span><span>Choix multiple</span><span>Simultanée</span><span>Finale</span></div>
           {simulations.map((row) => <div key={row.players} className="grid grid-cols-4 gap-2 p-3 text-sm text-body border-b border-line/40 last:border-0"><span className="font-bold text-gold">{row.players}</span><span>-{row.afterBuzzer}</span><span>-{row.afterSimultaneous}</span><span className="font-bold text-brand-green">{row.finalists}</span></div>)}
         </div>
       </div>
@@ -1128,8 +1008,6 @@ function LiveView({ gameState, banks, onExit, eliminatedPlayerName }: { gameStat
                     <p className="text-brand-green font-black">{question.type === 'numeric' ? 'Chiffre le plus proche' : 'Réponse libre'}</p>
                   </div>
                 )}
-                {gameState.currentBuzz && <div className="live-alert is-buzz"><span>BUZZ</span><b>{gameState.currentBuzz.name}</b></div>}
-                {gameState.wrongBuzzers.length > 0 && <div className="live-alert is-wrong">Déjà écartés : {gameState.wrongBuzzers.map((id) => gameState.players.find((player) => player.id === id)?.name).filter(Boolean).join(', ')}</div>}
                 {gameState.lastElimination && <div className="live-alert is-elimination">Éliminés : {gameState.lastElimination.eliminatedNames.join(', ')}</div>}
               </>
             ) : null}
@@ -1266,7 +1144,7 @@ function useCountdown(endsAt: number | null, running: boolean): number {
 function phaseLabel(state: GameState): string {
   switch (state.phase) {
     case 'lobby': return 'Lobby';
-    case 'question': return state.round === 'buzzer' ? 'Manche buzzer' : state.round === 'simultaneous' ? 'Manche simultanee' : 'Finale';
+    case 'question': return state.round === 'buzzer' ? 'Manche choix multiple' : state.round === 'simultaneous' ? 'Manche simultanée' : 'Finale';
     case 'review': return 'Révision';
     case 'tiebreak': return 'Départage';
     case 'game-over': return 'Terminé';
@@ -1276,7 +1154,7 @@ function phaseLabel(state: GameState): string {
 
 function roundLabel(round: QuestionRound): string {
   switch (round) {
-    case 'buzzer': return 'Manche buzzer';
+    case 'buzzer': return 'Manche choix multiple';
     case 'simultaneous': return 'Manche simultanée';
     case 'final': return 'Finale';
   }

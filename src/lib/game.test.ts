@@ -10,6 +10,7 @@ import {
   isValidPlayerName,
   normalizeGameState,
   resolveEliminationTie,
+  timerDuration,
   type GameState,
   type QuestionBanks,
 } from './game';
@@ -129,6 +130,10 @@ describe('égalités et finale', () => {
 });
 
 describe('validation des réponses et identités', () => {
+  it('accorde 15 secondes aux QCM de la première manche', () => {
+    expect(timerDuration(banks.buzzer[0])).toBe(15_000);
+  });
+
   it('supprime les anciens jokers lors de la normalisation', () => {
     const normalized = normalizeGameState({
       ...createGameState(),
@@ -136,12 +141,16 @@ describe('validation des réponses et identités', () => {
       pause: { joker: 'phone-a-stranger', playerName: 'Kevin', remainingMs: 5000 },
       usedJokers: { p1: ['phone-a-stranger'] },
       fiftyFiftyPlayers: ['p1'],
+      currentBuzz: { playerId: 'p1', name: 'Kevin', ts: 1 },
+      wrongBuzzers: ['p1'],
     }) as GameState & Record<string, unknown>;
 
     expect(normalized.phase).toBe('question');
     expect(normalized).not.toHaveProperty('pause');
     expect(normalized).not.toHaveProperty('usedJokers');
     expect(normalized).not.toHaveProperty('fiftyFiftyPlayers');
+    expect(normalized).not.toHaveProperty('currentBuzz');
+    expect(normalized).not.toHaveProperty('wrongBuzzers');
   });
 
   it("ignore une ancienne élimination dont Firebase a supprimé la liste vide", () => {

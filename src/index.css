@@ -17,7 +17,6 @@
   --color-faint: #5c7768;
   --color-host-btn: #9dffb8;
   --color-dark-ink: #06210f;
-  --color-buzzed: #2a3630;
   --color-warn-bg: #4a3020;
   --color-warn-border: #8b6820;
   --color-reset-bg: #4a2015;
@@ -37,6 +36,14 @@
 
   body {
     margin: 0;
+  }
+
+  *,
+  *::before,
+  *::after {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
 }
 
@@ -341,17 +348,6 @@
     font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .live-alert.is-buzz {
-    border: 1px solid #39ff6a;
-    color: #39ff6a;
-    background: rgba(57, 255, 106, 0.12);
-  }
-
-  .live-alert.is-buzz span {
-    font-size: 9px;
-    letter-spacing: 1px;
   }
 
   .live-alert.is-wrong,
