@@ -1,96 +1,162 @@
 import { get, onValue, ref, runTransaction } from 'firebase/database';
 import { defaultQuestionBanks } from '../data/defaultQuestions';
 import { db } from '../firebase';
-import type { Question, QuestionBanks, QuestionRound } from './game';
+import { normalizeNumericAnswer, type Question, type QuestionBanks, type QuestionRound } from './game';
 
 const QUESTIONS_PATH = 'fonceday-question-banks';
-const QUESTION_BANK_VERSION = 20260823;
+const QUESTION_BANK_VERSION = 20260912;
 
-type StoredQuestionBanks = Partial<QuestionBanks> & { _version?: number };
-
-function cloneDefaults(): QuestionBanks {
-  return JSON.parse(JSON.stringify(defaultQuestionBanks)) as QuestionBanks;
+// A read never writes or replaces existing custom questions, regardless of version.
+export function normalizeBanks(value: unknown): QuestionBanks {
+  if (value === null || value === undefined) return structuredClone(defaultQuestionBanks);
+  if (typeof value !== 'object' || Array.isArray(value))
+    throw new Error('Format de banque invalide. Les données ont été conservées.');
+  const source = value as Partial<QuestionBanks>;
+  for (const key of ['buzzer', 'simultaneous', 'final'] as const) {
+    if (source[key] != null && !Array.isArray(source[key]))
+      throw new Error('Format de banque invalide. Les données ont été conservées.');
+  }
+  function readRound(round: QuestionRound): Question[] {
+    return (source[round] || []).map((question) => {
+      if (!question || typeof question !== 'object' || typeof question.question !== 'string') {
+        throw new Error('Une question est invalide. Les données ont été conservées.');
+      }
+      // Firebase omits empty arrays, notably options on numeric and free-text questions.
+      return { ...question, round, options: Array.isArray(question.options) ? question.options : [] };
+    });
+  }
+  return { buzzer: readRound('buzzer'), simultaneous: readRound('simultaneous'), final: readRound('final') };
 }
 
-function normalizeBanks(value: unknown): QuestionBanks {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return cloneDefaults();
-  const source = value as Partial<QuestionBanks>;
+export function cleanQuestion(question: Question): Question {
+  const clean: Question = {
+    id: question.id,
+    round: question.round,
+    type: question.type,
+    question: question.question.trim(),
+    options: question.type === 'qcm' ? question.options.map((option) => option.trim()) : [],
+    correct: question.type === 'qcm' ? question.correct : 0,
+  };
+  if (!clean.question) throw new Error('Renseigne la question.');
+  if (clean.round === 'buzzer' && clean.type !== 'qcm')
+    throw new Error('La première manche accepte uniquement les QCM.');
+  if (
+    clean.type === 'qcm' &&
+    (clean.options.length !== 4 ||
+      clean.options.some((option) => !option) ||
+      new Set(clean.options.map((option) => option.toLocaleLowerCase('fr'))).size !== 4 ||
+      !Number.isInteger(clean.correct) ||
+      clean.correct < 0 ||
+      clean.correct > 3)
+  )
+    throw new Error('Renseigne quatre propositions distinctes et une bonne réponse.');
+  if (clean.type === 'numeric') {
+    const value = normalizeNumericAnswer(String(question.numericAnswer ?? ''));
+    if (value === null) throw new Error('Renseigne une valeur cible numérique.');
+    clean.numericAnswer = value;
+  }
+  if (clean.type === 'free-text') {
+    if (!question.acceptedAnswer?.trim()) throw new Error('Renseigne une réponse de référence.');
+    clean.acceptedAnswer = question.acceptedAnswer.trim();
+    clean.acceptedAnswers = (question.acceptedAnswers || []).map((answer) => answer.trim()).filter(Boolean);
+  }
+  if (clean.round === 'final' && question.reserve) clean.reserve = true;
+  return clean;
+}
+
+export function replaceQuestion(
+  banks: QuestionBanks,
+  from: QuestionRound,
+  id: number,
+  updated: Question,
+): QuestionBanks {
+  if (!banks[from].some((question) => question.id === id))
+    throw new Error('Cette question a été supprimée. Actualise la liste.');
+  const question = cleanQuestion({ ...updated, id });
+  if (from === question.round)
+    return { ...banks, [from]: banks[from].map((item) => (item.id === id ? question : item)) };
   return {
-    buzzer: Array.isArray(source.buzzer) ? source.buzzer : [],
-    simultaneous: Array.isArray(source.simultaneous) ? source.simultaneous : [],
-    final: Array.isArray(source.final) ? source.final : [],
+    ...banks,
+    [from]: banks[from].filter((item) => item.id !== id),
+    [question.round]: [...banks[question.round], question],
   };
 }
 
-function storedVersion(value: unknown): number {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
-  return Number((value as StoredQuestionBanks)._version) || 0;
-}
-
-async function replaceOutdatedBanks(): Promise<QuestionBanks> {
-  if (!db) return cloneDefaults();
-  const result = await runTransaction(ref(db, QUESTIONS_PATH), (current) => {
-    if (storedVersion(current) >= QUESTION_BANK_VERSION) return;
-    return { ...cloneDefaults(), _version: QUESTION_BANK_VERSION };
-  });
-  return normalizeBanks(result.snapshot.val());
-}
-
-export function loadQuestionBanks(callback: (banks: QuestionBanks) => void, onError?: (error: Error) => void): () => void {
+export function loadQuestionBanks(
+  callback: (banks: QuestionBanks) => void,
+  onError?: (error: Error) => void,
+): () => void {
   if (!db) {
-    callback(cloneDefaults());
+    callback(normalizeBanks(null));
     return () => {};
   }
-  const database = db;
-  return onValue(ref(database, QUESTIONS_PATH), async (snapshot) => {
-    const value = snapshot.val();
-    if (storedVersion(value) < QUESTION_BANK_VERSION) {
-      callback(await replaceOutdatedBanks());
-      return;
-    }
-    callback(normalizeBanks(value));
-  }, (error) => {
-    console.error('Erreur chargement questions:', error);
-    onError?.(error);
-    callback(cloneDefaults());
-  });
+  return onValue(
+    ref(db, QUESTIONS_PATH),
+    (snapshot) => {
+      try {
+        callback(normalizeBanks(snapshot.val()));
+      } catch (error) {
+        onError?.(error as Error);
+      }
+    },
+    (error) => {
+      onError?.(error);
+    },
+  );
 }
 
-export function updateQuestionBanks(update: (banks: QuestionBanks) => QuestionBanks): Promise<void> {
+export async function updateQuestionBanks(update: (banks: QuestionBanks) => QuestionBanks): Promise<void> {
   if (!db) throw new Error('Firebase non disponible');
-  return runTransaction(ref(db, QUESTIONS_PATH), (current) => ({
-    ...update(storedVersion(current) >= QUESTION_BANK_VERSION ? normalizeBanks(current) : cloneDefaults()),
-    _version: QUESTION_BANK_VERSION,
-  })).then(() => undefined);
-}
-
-export async function addQuestion(round: QuestionRound, question: Omit<Question, 'id' | 'round'>): Promise<void> {
-  await updateQuestionBanks((banks) => {
-    const ids = Object.values(banks).flat().map((item) => item.id);
-    return { ...banks, [round]: [...banks[round], { ...question, id: Math.max(0, ...ids) + 1, round }] };
-  });
-}
-
-export async function updateQuestion(round: QuestionRound, id: number, updates: Omit<Question, 'id' | 'round'>): Promise<void> {
-  await updateQuestionBanks((banks) => ({
-    ...banks,
-    [round]: banks[round].map((question) => question.id === id ? { ...question, ...updates } : question),
+  await runTransaction(ref(db, QUESTIONS_PATH), (current) => ({
+    ...update(normalizeBanks(current)),
+    _version: Math.max(Number(current?._version) || 0, QUESTION_BANK_VERSION),
   }));
 }
 
+export async function addQuestion(
+  round: QuestionRound,
+  input: Omit<Question, 'id' | 'round'>,
+): Promise<void> {
+  await updateQuestionBanks((banks) => {
+    const id =
+      Math.max(
+        0,
+        ...Object.values(banks)
+          .flat()
+          .map((question) => question.id),
+      ) + 1;
+    return { ...banks, [round]: [...banks[round], cleanQuestion({ ...input, id, round })] };
+  });
+}
+
+export async function updateQuestion(
+  from: QuestionRound,
+  id: number,
+  updates: Omit<Question, 'id'>,
+): Promise<void> {
+  await updateQuestionBanks((banks) => replaceQuestion(banks, from, id, { ...updates, id }));
+}
+
 export async function deleteQuestion(round: QuestionRound, id: number): Promise<void> {
-  await updateQuestionBanks((banks) => ({ ...banks, [round]: banks[round].filter((question) => question.id !== id) }));
+  await updateQuestionBanks((banks) => ({
+    ...banks,
+    [round]: banks[round].filter((question) => question.id !== id),
+  }));
 }
 
 export async function reorderQuestions(round: QuestionRound, ids: number[]): Promise<void> {
   await updateQuestionBanks((banks) => {
     const byId = new Map(banks[round].map((question) => [question.id, question]));
-    return { ...banks, [round]: ids.map((id) => byId.get(id)).filter((question): question is Question => Boolean(question)) };
+    const ordered = [...new Set(ids)]
+      .map((id) => byId.get(id))
+      .filter((question): question is Question => Boolean(question));
+    return {
+      ...banks,
+      [round]: [...ordered, ...banks[round].filter((question) => !ids.includes(question.id))],
+    };
   });
 }
 
 export async function getQuestionBanks(): Promise<QuestionBanks> {
-  if (!db) return cloneDefaults();
-  const value = (await get(ref(db, QUESTIONS_PATH))).val();
-  return storedVersion(value) >= QUESTION_BANK_VERSION ? normalizeBanks(value) : replaceOutdatedBanks();
+  return db ? normalizeBanks((await get(ref(db, QUESTIONS_PATH))).val()) : normalizeBanks(null);
 }

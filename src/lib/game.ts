@@ -11,6 +11,8 @@ export interface Question {
   correct: number;
   numericAnswer?: number;
   acceptedAnswer?: string;
+  acceptedAnswers?: string[];
+  reserve?: boolean;
 }
 
 export interface QuestionBanks {
@@ -52,6 +54,13 @@ export interface PendingElimination {
 }
 
 export interface GameState {
+  gameId: string;
+  revision: number;
+  questionRevision: number;
+  suddenDeath: boolean;
+  pausedRemainingMs: number | null;
+  manualVerdicts: Record<string, boolean>;
+  undo: { state: GameState; remainingMs: number | null; label: string } | null;
   players: Player[];
   activePlayerIds: string[];
   phase: GamePhase;
@@ -69,8 +78,15 @@ export interface GameState {
   gameStarted: boolean;
 }
 
-export function createGameState(): GameState {
+export function createGameState(gameId = 'legacy'): GameState {
   return {
+    gameId,
+    revision: 0,
+    questionRevision: 0,
+    suddenDeath: false,
+    pausedRemainingMs: null,
+    manualVerdicts: {},
+    undo: null,
     players: [],
     activePlayerIds: [],
     phase: 'lobby',
@@ -92,14 +108,23 @@ export function createGameState(): GameState {
 export function normalizeGameState(raw: unknown): GameState {
   const base = createGameState();
   if (!raw || typeof raw !== 'object') return base;
-  const legacyState = raw as Omit<Partial<GameState>, 'phase'> & { activePlayers?: unknown; phase?: string; pause?: unknown; usedJokers?: unknown; fiftyFiftyPlayers?: unknown };
+  const legacyState = raw as Omit<Partial<GameState>, 'phase'> & {
+    activePlayers?: unknown;
+    phase?: string;
+    pause?: unknown;
+    usedJokers?: unknown;
+    fiftyFiftyPlayers?: unknown;
+  };
   const legacyActiveNames = Array.isArray(legacyState.activePlayers)
     ? (legacyState.activePlayers as string[])
     : [];
   const validPhases: GamePhase[] = ['lobby', 'question', 'review', 'tiebreak', 'game-over'];
-  const phase: GamePhase = legacyState.phase === 'pause'
-    ? 'question'
-    : validPhases.includes(legacyState.phase as GamePhase) ? legacyState.phase as GamePhase : base.phase;
+  const phase: GamePhase =
+    legacyState.phase === 'pause'
+      ? 'question'
+      : validPhases.includes(legacyState.phase as GamePhase)
+        ? (legacyState.phase as GamePhase)
+        : base.phase;
   const state = { ...legacyState } as Partial<GameState> & Record<string, unknown>;
   delete state.activePlayers;
   delete state.pause;
@@ -123,9 +148,15 @@ export function normalizeGameState(raw: unknown): GameState {
     phase: phase || base.phase,
     players,
     activePlayerIds,
-    submittedAnswers: state.submittedAnswers && typeof state.submittedAnswers === 'object' ? state.submittedAnswers : {},
-    answerOutcomes: state.answerOutcomes && typeof state.answerOutcomes === 'object' ? state.answerOutcomes : {},
+    submittedAnswers:
+      state.submittedAnswers && typeof state.submittedAnswers === 'object' ? state.submittedAnswers : {},
+    answerOutcomes:
+      state.answerOutcomes && typeof state.answerOutcomes === 'object' ? state.answerOutcomes : {},
     finalScores: state.finalScores && typeof state.finalScores === 'object' ? state.finalScores : {},
+    manualVerdicts:
+      state.manualVerdicts && typeof state.manualVerdicts === 'object' ? state.manualVerdicts : {},
+    pausedRemainingMs:
+      typeof state.pausedRemainingMs === 'number' ? Math.max(0, state.pausedRemainingMs) : null,
     lastElimination: normalizeLastElimination(state.lastElimination),
     pendingElimination: normalizePendingElimination(state.pendingElimination, players),
   };
@@ -148,20 +179,34 @@ function normalizeLastElimination(value: unknown): Elimination | null {
 
 function normalizePendingElimination(value: unknown, players: Player[]): PendingElimination | null {
   if (!value || typeof value !== 'object') return null;
-  const pending = value as Partial<PendingElimination> & { candidates?: unknown; eliminateFromCandidates?: unknown };
+  const pending = value as Partial<PendingElimination> & {
+    candidates?: unknown;
+    eliminateFromCandidates?: unknown;
+  };
   if (pending.round !== 'buzzer' && pending.round !== 'simultaneous') return null;
 
   const rawCandidates = Array.isArray(pending.candidateIds)
     ? pending.candidateIds
-    : Array.isArray(pending.candidates) ? pending.candidates : [];
+    : Array.isArray(pending.candidates)
+      ? pending.candidates
+      : [];
   const candidateIds = rawCandidates
     .filter((candidate): candidate is string => typeof candidate === 'string')
-    .map((candidate) => players.find((player) => player.id === candidate || player.name === candidate)?.id || candidate);
+    .map(
+      (candidate) =>
+        players.find((player) => player.id === candidate || player.name === candidate)?.id || candidate,
+    );
   const eliminateCount = Number.isInteger(pending.eliminateCount)
     ? Number(pending.eliminateCount)
     : Number(pending.eliminateFromCandidates);
 
-  if (!candidateIds.length || !Number.isInteger(eliminateCount) || eliminateCount <= 0 || eliminateCount >= candidateIds.length) return null;
+  if (
+    !candidateIds.length ||
+    !Number.isInteger(eliminateCount) ||
+    eliminateCount <= 0 ||
+    eliminateCount >= candidateIds.length
+  )
+    return null;
   return {
     round: pending.round,
     candidateIds,
@@ -177,9 +222,11 @@ export function questionsForRound(banks: QuestionBanks, round: QuestionRound): Q
 }
 
 export function getCurrentQuestion(state: GameState, banks: QuestionBanks): Question | null {
-  const questions = questionsForRound(banks, state.round);
+  const questions =
+    state.round === 'final'
+      ? banks.final.filter((question) => Boolean(question.reserve) === state.suddenDeath)
+      : questionsForRound(banks, state.round);
   if (!questions.length) return null;
-  if (state.round === 'final' || state.phase === 'tiebreak') return questions[state.questionIndex % questions.length] || null;
   return questions[state.questionIndex] || null;
 }
 
@@ -191,7 +238,10 @@ export function timerDuration(question: Question): number {
   return question.type === 'numeric' ? 10_000 : 15_000;
 }
 
-export function calculateEliminations(playerCount: number): { afterBuzzer: number; afterSimultaneous: number } {
+export function calculateEliminations(playerCount: number): {
+  afterBuzzer: number;
+  afterSimultaneous: number;
+} {
   const excess = Math.max(0, playerCount - 2);
   return { afterBuzzer: Math.ceil(excess / 2), afterSimultaneous: Math.floor(excess / 2) };
 }
@@ -205,7 +255,8 @@ export interface EliminationDecision {
 export function decideElimination(state: GameState, count: number): EliminationDecision {
   const active = getActivePlayers(state);
   if (count <= 0) return { keptIds: active.map((player) => player.id), eliminatedIds: [], tie: null };
-  if (count >= active.length) return { keptIds: [], eliminatedIds: active.map((player) => player.id), tie: null };
+  if (count >= active.length)
+    return { keptIds: [], eliminatedIds: active.map((player) => player.id), tie: null };
 
   const ranked = [...active].sort((a, b) => a.score - b.score);
   const threshold = ranked[count - 1].score;
@@ -235,6 +286,9 @@ function questionState(state: GameState, updates: Partial<GameState>): GameState
     phase: 'question',
     submittedAnswers: {},
     answerOutcomes: {},
+    manualVerdicts: {},
+    pausedRemainingMs: null,
+    questionRevision: state.questionRevision + 1,
     timerEndsAt: null,
     ...updates,
   };
@@ -242,19 +296,35 @@ function questionState(state: GameState, updates: Partial<GameState>): GameState
 
 export function advanceGame(state: GameState, banks: QuestionBanks): GameState {
   if (state.phase !== 'review') return state;
-  const roundQuestions = questionsForRound(banks, state.round);
+  const roundQuestions =
+    state.round === 'final'
+      ? banks.final.filter((question) => !question.reserve)
+      : questionsForRound(banks, state.round);
   const nextIndex = state.questionIndex + 1;
-  if (nextIndex < roundQuestions.length) return questionState(state, { questionIndex: nextIndex });
+  if (!state.suddenDeath && nextIndex < roundQuestions.length)
+    return questionState(state, { questionIndex: nextIndex });
 
   if (state.round === 'final') {
     const final = resolveFinal(state);
-    if (final.winnerId) return { ...state, activePlayerIds: [final.winnerId], phase: 'game-over', winnerId: final.winnerId, timerEndsAt: null };
-    return questionState(state, { activePlayerIds: final.leaderIds, questionIndex: 0 });
+    if (final.winnerId)
+      return {
+        ...state,
+        activePlayerIds: [final.winnerId],
+        phase: 'game-over',
+        winnerId: final.winnerId,
+        timerEndsAt: null,
+      };
+    return questionState(state, {
+      activePlayerIds: final.leaderIds,
+      suddenDeath: true,
+      questionIndex: state.suddenDeath ? nextIndex : 0,
+    });
   }
 
-  const plan = state.eliminationPlan.afterBuzzer + state.eliminationPlan.afterSimultaneous > 0
-    ? state.eliminationPlan
-    : calculateEliminations(state.players.length);
+  const plan =
+    state.eliminationPlan.afterBuzzer + state.eliminationPlan.afterSimultaneous > 0
+      ? state.eliminationPlan
+      : calculateEliminations(state.players.length);
   const count = state.round === 'buzzer' ? plan.afterBuzzer : plan.afterSimultaneous;
   const decision = decideElimination(state, count);
   const nextRound: QuestionRound = state.round === 'buzzer' ? 'simultaneous' : 'final';
@@ -274,10 +344,11 @@ export function advanceGame(state: GameState, banks: QuestionBanks): GameState {
     };
   }
 
-  const eliminatedNames = state.players.filter((player) => decision.eliminatedIds.includes(player.id)).map((player) => player.name);
-  const finalScores = nextRound === 'final'
-    ? Object.fromEntries(decision.keptIds.map((id) => [id, 0]))
-    : state.finalScores;
+  const eliminatedNames = state.players
+    .filter((player) => decision.eliminatedIds.includes(player.id))
+    .map((player) => player.name);
+  const finalScores =
+    nextRound === 'final' ? Object.fromEntries(decision.keptIds.map((id) => [id, 0])) : state.finalScores;
   return questionState(state, {
     round: nextRound,
     questionIndex: 0,
@@ -294,13 +365,17 @@ export function resolveEliminationTie(state: GameState, selectedIds: string[]): 
   const pending = state.pendingElimination;
   if (state.phase !== 'tiebreak' || !pending) return state;
   const selected = [...new Set(selectedIds)];
-  if (selected.length !== pending.eliminateCount || selected.some((id) => !pending.candidateIds.includes(id))) return state;
+  if (selected.length !== pending.eliminateCount || selected.some((id) => !pending.candidateIds.includes(id)))
+    return state;
 
   const allEliminatedIds = [...pending.automaticallyEliminatedIds, ...selected];
   const keptIds = state.activePlayerIds.filter((id) => !selected.includes(id));
   const nextRound: QuestionRound = pending.round === 'buzzer' ? 'simultaneous' : 'final';
-  const eliminatedNames = state.players.filter((player) => allEliminatedIds.includes(player.id)).map((player) => player.name);
-  const finalScores = nextRound === 'final' ? Object.fromEntries(keptIds.map((id) => [id, 0])) : state.finalScores;
+  const eliminatedNames = state.players
+    .filter((player) => allEliminatedIds.includes(player.id))
+    .map((player) => player.name);
+  const finalScores =
+    nextRound === 'final' ? Object.fromEntries(keptIds.map((id) => [id, 0])) : state.finalScores;
 
   return questionState(state, {
     round: nextRound,
@@ -322,7 +397,11 @@ export function resolveFinal(state: GameState): { winnerId: string | null; leade
 
 export function isValidPlayerName(value: string): boolean {
   const name = value.trim();
-  return name.length >= 2 && name.length <= 20 && !['.', '#', '$', '[', ']', '/'].some((character) => name.includes(character));
+  return (
+    name.length >= 2 &&
+    name.length <= 20 &&
+    !['.', '#', '$', '[', ']', '/'].some((character) => name.includes(character))
+  );
 }
 
 export function normalizeNumericAnswer(value: string): number | null {
@@ -344,19 +423,199 @@ export function computeNumericOutcome(
   return { correct: diff === 0, diff };
 }
 
-export function computeQcmOutcome(
-  question: Question,
-  submitted: string,
-): boolean {
+export function computeQcmOutcome(question: Question, submitted: string): boolean {
   const letter = submitted.toUpperCase();
   const index = letter.charCodeAt(0) - 65;
   return index >= 0 && index < question.options.length && index === question.correct;
 }
 
-export function computeFreeTextOutcome(
-  question: Question,
-  submitted: string,
-): boolean {
-  if (!question.acceptedAnswer) return false;
-  return submitted.trim().toLowerCase() === question.acceptedAnswer.trim().toLowerCase();
+export function computeFreeTextOutcome(question: Question, submitted: string): boolean {
+  const value = normalizeFreeText(submitted);
+  return (
+    Boolean(value) &&
+    [question.acceptedAnswer || '', ...(question.acceptedAnswers || [])].some(
+      (answer) => normalizeFreeText(answer) === value,
+    )
+  );
+}
+
+export function normalizeFreeText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('fr')
+    .replace(/[’']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function displayedScore(state: GameState, playerId: string): number {
+  return state.round === 'final'
+    ? state.finalScores[playerId] || 0
+    : state.players.find((player) => player.id === playerId)?.score || 0;
+}
+
+export function rankedPlayers(state: GameState): Player[] {
+  const players =
+    state.round === 'final'
+      ? state.players.filter(
+          (player) =>
+            Object.hasOwn(state.finalScores, player.id) || state.activePlayerIds.includes(player.id),
+        )
+      : state.players;
+  return [...players].sort(
+    (a, b) =>
+      Number(b.id === state.winnerId) - Number(a.id === state.winnerId) ||
+      displayedScore(state, b.id) - displayedScore(state, a.id) ||
+      a.name.localeCompare(b.name),
+  );
+}
+
+export function pauseGame(state: GameState, now: number): GameState {
+  if (state.phase !== 'question' || state.timerEndsAt === null || state.pausedRemainingMs !== null)
+    return state;
+  return { ...state, pausedRemainingMs: Math.max(0, state.timerEndsAt - now), timerEndsAt: null };
+}
+
+export function resumeGame(state: GameState, now: number): GameState {
+  if (state.phase !== 'question' || state.pausedRemainingMs === null) return state;
+  return { ...state, timerEndsAt: now + state.pausedRemainingMs, pausedRemainingMs: null };
+}
+
+export function submitPlayerAnswer(
+  state: GameState,
+  expected: GameState,
+  playerId: string,
+  value: string,
+  now: number,
+): GameState {
+  if (
+    state.gameId !== expected.gameId ||
+    state.questionRevision !== expected.questionRevision ||
+    state.round !== expected.round ||
+    state.questionIndex !== expected.questionIndex ||
+    state.suddenDeath !== expected.suddenDeath ||
+    state.phase !== 'question' ||
+    state.pausedRemainingMs !== null ||
+    state.timerEndsAt === null ||
+    now >= state.timerEndsAt ||
+    !state.activePlayerIds.includes(playerId) ||
+    state.submittedAnswers[playerId] ||
+    !value.trim()
+  )
+    return state;
+  return {
+    ...state,
+    submittedAnswers: {
+      ...state.submittedAnswers,
+      [playerId]: {
+        value: value.trim(),
+        submittedAt: now,
+        round: state.round,
+        questionIndex: state.questionIndex,
+      },
+    },
+  };
+}
+
+export function canResolveAnswers(state: GameState, now: number): boolean {
+  return (
+    state.phase === 'question' &&
+    state.pausedRemainingMs === null &&
+    state.timerEndsAt !== null &&
+    (now >= state.timerEndsAt ||
+      getActivePlayers(state).every((player) => Boolean(state.submittedAnswers[player.id])))
+  );
+}
+
+export function resolveAnswers(state: GameState, banks: QuestionBanks, now: number): GameState {
+  const question = getCurrentQuestion(state, banks);
+  if (!question || !canResolveAnswers(state, now)) return state;
+  const active = getActivePlayers(state);
+  // Free text always needs a deliberate host verdict for every submitted answer.
+  if (
+    question.type === 'free-text' &&
+    active.some(
+      (player) => state.submittedAnswers[player.id] && typeof state.manualVerdicts[player.id] !== 'boolean',
+    )
+  )
+    return state;
+  let winners = active
+    .filter((player) => {
+      const answer = state.submittedAnswers[player.id];
+      return (
+        answer &&
+        (question.type === 'qcm'
+          ? computeQcmOutcome(question, answer.value)
+          : state.manualVerdicts[player.id] === true)
+      );
+    })
+    .map((player) => player.id);
+  if (question.type === 'numeric') {
+    const entries = active
+      .flatMap((player) => {
+        const answer = state.submittedAnswers[player.id];
+        if (!answer) return [];
+        const { diff } = computeNumericOutcome(question, answer.value);
+        return Number.isFinite(diff) ? [{ id: player.id, diff, time: answer.submittedAt }] : [];
+      })
+      .sort((a, b) => a.diff - b.diff || a.time - b.time);
+    winners = entries.slice(0, 1).map((entry) => entry.id);
+  }
+  return {
+    ...state,
+    phase: 'review',
+    timerEndsAt: null,
+    players: state.players.map((player) => ({
+      ...player,
+      score: player.score + Number(winners.includes(player.id)),
+    })),
+    finalScores:
+      state.round === 'final'
+        ? Object.fromEntries(
+            [...new Set([...Object.keys(state.finalScores), ...state.activePlayerIds])].map((id) => [
+              id,
+              (state.finalScores[id] || 0) + Number(winners.includes(id)),
+            ]),
+          )
+        : state.finalScores,
+    answerOutcomes: Object.fromEntries(
+      active.map((player) => [
+        player.id,
+        {
+          value: state.submittedAnswers[player.id]?.value || '',
+          correct: winners.includes(player.id),
+          points: Number(winners.includes(player.id)),
+        },
+      ]),
+    ),
+  };
+}
+
+export function rememberAction(previous: GameState, next: GameState, label: string, now: number): GameState {
+  if (next === previous) return previous;
+  return {
+    ...next,
+    revision: previous.revision + 1,
+    undo: {
+      state: { ...previous, undo: null },
+      label,
+      remainingMs:
+        previous.pausedRemainingMs ??
+        (previous.timerEndsAt === null ? null : Math.max(0, previous.timerEndsAt - now)),
+    },
+  };
+}
+
+export function undoAction(state: GameState): GameState {
+  if (!state.undo) return state;
+  const { state: previous, remainingMs } = state.undo;
+  return {
+    ...normalizeGameState(previous),
+    revision: state.revision + 1,
+    questionRevision: state.questionRevision + 1,
+    timerEndsAt: null,
+    pausedRemainingMs: previous.phase === 'question' ? remainingMs : null,
+    undo: null,
+  };
 }

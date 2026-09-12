@@ -6,14 +6,6 @@ import './index.css';
 import App from './App.tsx';
 import ErrorBoundary from './ErrorBoundary.tsx';
 
-function blockClipboard(event: ClipboardEvent) {
-  event.preventDefault();
-}
-
-document.addEventListener('copy', blockClipboard);
-document.addEventListener('cut', blockClipboard);
-document.addEventListener('paste', blockClipboard);
-
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
